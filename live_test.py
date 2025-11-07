@@ -1,16 +1,28 @@
-# live_test.py  (robusto: list/diag/meter/record)  SIN webrtcvad
-# .env: lee OPENAI_API_KEY automáticamente.
-# Soporta:
-#   --mode list|diag|meter|record   y también  --list  (alias de list)
+# live_test.py  — Grabación + Transcripción + Envío a IA (FastAPI)
+# Requisitos: pip install sounddevice numpy requests
+# .env (en la raíz del proyecto):
+#   OPENAI_API_KEY=sk-...
+#   TOTEM_API_BASE=http://127.0.0.1:8000
+#   # TOTEM_SESSION_ID=<opcional, si ya tienes una>
+#   # MIC_DEVICE=54           # opcional por defecto
+#   # MIC_RATE=16000          # 16000 para BT Hands-Free; 44100/48000 para Realtek/USB
 #
+# Modos:
+#   python live_test.py --list
+#   python live_test.py --mode list|diag|meter|record [--device N] [--rate 44100]
+#   python live_test.py --mode meter --device N --rate 16000
+#   python live_test.py --device N --rate 16000 --print_rms --debug
+
 import argparse
 import contextlib
+import json
 import os
 import queue
 import sys
 import time
 import wave
 from datetime import datetime
+from typing import Optional, Dict, Any, Tuple, List
 
 import numpy as np
 import requests
@@ -19,36 +31,45 @@ import sounddevice as sd
 OPENAI_TRANSCRIBE_URL = "https://api.openai.com/v1/audio/transcriptions"
 DEFAULT_MODEL = "whisper-1"
 DEFAULT_LANGUAGE = "es"
+_SESSION_FILE = ".totem_session"
 
-# ---------- .env loader ----------
+# -------------------- .env utils --------------------
 def _load_dotenv_into_environ(filename: str = ".env"):
+    """Carga pares KEY=VALUE al entorno si no existen."""
     try:
-        path = filename if os.path.isabs(filename) else os.path.join(os.getcwd(), filename)
-        if not os.path.isfile(path):
-            here = os.path.dirname(os.path.abspath(__file__))
-            path = os.path.join(here, filename)
-            if not os.path.isfile(path):
-                return
-        with open(path, "r", encoding="utf-8") as f:
-            for raw in f:
-                line = raw.strip()
-                if not line or line.startswith("#") or "=" not in line:
-                    continue
-                k, v = line.split("=", 1)
-                k = k.strip()
-                v = v.strip().strip("'").strip('"')
-                os.environ.setdefault(k, v)
+        search = [
+            os.path.join(os.getcwd(), filename),
+            os.path.join(os.path.dirname(os.path.abspath(__file__)), filename),
+        ]
+        for path in search:
+            if os.path.isfile(path):
+                with open(path, "r", encoding="utf-8") as f:
+                    for raw in f:
+                        line = raw.strip()
+                        if not line or line.startswith("#") or "=" not in line:
+                            continue
+                        k, v = line.split("=", 1)
+                        k = k.strip()
+                        v = v.strip().strip("'").strip('"')
+                        os.environ.setdefault(k, v)
+                break
     except Exception:
         pass
 
-def _get_openai_key() -> str:
-    key = os.environ.get("OPENAI_API_KEY", "").strip()
-    if key:
-        return key
-    _load_dotenv_into_environ(".env")
-    return os.environ.get("OPENAI_API_KEY", "").strip()
+def _get_env(name: str, default: Optional[str] = None) -> Optional[str]:
+    v = os.environ.get(name)
+    if v is None:
+        _load_dotenv_into_environ(".env")
+        v = os.environ.get(name, default)
+    return v
 
-# ---------- util WAV ----------
+def _get_openai_key() -> str:
+    key = (_get_env("OPENAI_API_KEY") or "").strip()
+    if not key:
+        raise RuntimeError("Falta OPENAI_API_KEY (ponla en .env).")
+    return key
+
+# -------------------- WAV utils --------------------
 def _write_wav(path: str, pcm_bytes: bytes, sample_rate: int):
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
     with contextlib.closing(wave.open(path, "wb")) as wf:
@@ -58,13 +79,12 @@ def _write_wav(path: str, pcm_bytes: bytes, sample_rate: int):
         wf.writeframes(pcm_bytes)
 
 def _rms_int16(frame: np.ndarray) -> float:
-    f32 = frame.astype(np.int32)
-    if f32.size == 0:
+    if frame.size == 0:
         return 0.0
-    rms = np.sqrt(np.mean(f32 * f32))
-    return float(rms) / 32768.0
+    x = frame.astype(np.int32)
+    return float(np.sqrt(np.mean(x * x))) / 32768.0
 
-# ---------- modos ----------
+# -------------------- List / Diag / Meter --------------------
 def mode_list():
     devices = sd.query_devices()
     default_in, default_out = sd.default.device
@@ -105,8 +125,8 @@ def mode_meter(device: int, rate: int, frame_ms: int):
                 sys.stdout.write(f"\rRMS:{r:.3f} {bar:<50}")
                 sys.stdout.flush()
 
-# ---------- captura robusta ----------
-def _record_fixed_seconds(device, sample_rate, secs=5, channels=1, dtype="int16"):
+# -------------------- Captura robusta --------------------
+def _record_fixed_seconds(device: Optional[int], sample_rate: int, secs=5, channels=1, dtype="int16") -> str:
     frames = int(sample_rate * secs)
     data = sd.rec(frames, samplerate=sample_rate, channels=channels, dtype=dtype, device=device)
     sd.wait()
@@ -121,11 +141,14 @@ def _record_fixed_seconds(device, sample_rate, secs=5, channels=1, dtype="int16"
     return path
 
 def _try_stream_once(device, sample_rate, frame_ms, attempt, q_in, first_chunk_timeout):
+    """Intenta abrir stream con (channels,dtype); devuelve (stream, params) si llega un chunk, si no None."""
     channels, dtype = attempt
     frame_size = int(sample_rate * frame_ms / 1000)
+
     def callback(indata, frames, time_info, status):
         if status: pass
         q_in.put(indata.copy())
+
     try:
         stream = sd.InputStream(
             samplerate=sample_rate,
@@ -139,6 +162,7 @@ def _try_stream_once(device, sample_rate, frame_ms, attempt, q_in, first_chunk_t
         stream.__enter__()
     except Exception:
         return None, None
+
     deadline = time.time() + first_chunk_timeout
     got = False
     while time.time() < deadline and not got:
@@ -147,29 +171,31 @@ def _try_stream_once(device, sample_rate, frame_ms, attempt, q_in, first_chunk_t
             got = True
         except queue.Empty:
             pass
+
     if not got:
         stream.__exit__(None, None, None)
         return None, None
+
     return (stream, {"channels": channels, "dtype": dtype})
 
 def _record_until_silence(
-    device=None,
-    sample_rate=44100,
-    frame_ms=30,
-    calib_ms=400,
-    start_factor=2.0,
-    stop_factor=1.4,
-    preroll_ms=300,
-    start_min_frames=3,
-    stop_min_frames=12,
-    max_record_ms=15000,
-    force_start=False,
-    print_rms=False,
-    debug=False
-):
+    device: Optional[int] = None,
+    sample_rate: int = 44100,
+    frame_ms: int = 30,
+    calib_ms: int = 400,
+    start_factor: float = 2.0,
+    stop_factor: float = 1.4,
+    preroll_ms: int = 300,
+    start_min_frames: int = 3,
+    stop_min_frames: int = 12,
+    max_record_ms: int = 15000,
+    force_start: bool = False,
+    print_rms: bool = False,
+    debug: bool = False
+) -> str:
     assert frame_ms in (10, 20, 30), "frame_ms debe ser 10, 20 o 30"
-    q_in = queue.Queue()
-    audio_frames = []
+    q_in: "queue.Queue[np.ndarray]" = queue.Queue()
+    audio_frames: List[np.ndarray] = []
     frame_size = int(sample_rate * frame_ms / 1000)
 
     # 1) Intentar varias combinaciones hasta que llegue el primer chunk
@@ -180,8 +206,9 @@ def _record_until_silence(
         stream, used = _try_stream_once(device, sample_rate, frame_ms, attempt, q_in, first_chunk_timeout=3.0)
         if stream is not None:
             break
+
     if stream is None:
-        # Sin callback: fallback a captura directa 5 s
+        # Sin callback: captura directa 5 s
         return _record_fixed_seconds(device, sample_rate, secs=5, channels=1, dtype="int16")
 
     channels = used["channels"]
@@ -192,9 +219,9 @@ def _record_until_silence(
     cold_run = 0
     max_frames = int(max_record_ms / frame_ms)
     preroll_frames = int(preroll_ms / frame_ms)
-    ring = []
+    ring: List[np.ndarray] = []
 
-    # 2) Calibración con el stream ya abierto
+    # 2) Calibración
     need = max(1, int(calib_ms / frame_ms))
     noise_vals = []
     t0 = time.time()
@@ -235,7 +262,7 @@ def _record_until_silence(
             except queue.Empty:
                 if not voiced and time.time() > noaudio_deadline:
                     stream.__exit__(None, None, None)
-                    return ""  # hará fallback afuera
+                    return ""
                 if not voiced:
                     continue
                 else:
@@ -301,11 +328,9 @@ def _record_until_silence(
     _write_wav(path, pcm, sample_rate)
     return path
 
-# ---------- transcripción ----------
-def _transcribe(file_path: str, model=DEFAULT_MODEL, language=DEFAULT_LANGUAGE, temperature=0.0):
+# -------------------- Transcripción (OpenAI) --------------------
+def _transcribe(file_path: str, model=DEFAULT_MODEL, language=DEFAULT_LANGUAGE, temperature=0.0) -> str:
     key = _get_openai_key()
-    if not key:
-        raise RuntimeError("Falta OPENAI_API_KEY (agrega en .env como OPENAI_API_KEY=sk-XXXX).")
     if not os.path.isfile(file_path):
         raise FileNotFoundError(file_path)
     headers = {"Authorization": f"Bearer {key}"}
@@ -320,14 +345,151 @@ def _transcribe(file_path: str, model=DEFAULT_MODEL, language=DEFAULT_LANGUAGE, 
         r = requests.post(OPENAI_TRANSCRIBE_URL, headers=headers, data=data, files=files, timeout=120)
         r.raise_for_status()
         payload = r.json()
-    return payload.get("text", "").strip()
+    return (payload.get("text") or "").strip()
 
-def mode_record(args):
+# -------------------- Integración con IA (FastAPI) --------------------
+def _api_base() -> str:
+    base = _get_env("TOTEM_API_BASE", "http://127.0.0.1:8000") or "http://127.0.0.1:8000"
+    return base.rstrip("/")
+
+def _read_session_from_file() -> Optional[str]:
     try:
-        sd.check_input_settings(device=args.device, samplerate=args.rate, channels=1, dtype="int16")
+        if os.path.isfile(_SESSION_FILE):
+            with open(_SESSION_FILE, "r", encoding="utf-8") as f:
+                sid = f.read().strip()
+                if sid:
+                    return sid
+    except Exception:
+        pass
+    return None
+
+def _write_session_to_file(sid: str):
+    try:
+        with open(_SESSION_FILE, "w", encoding="utf-8") as f:
+            f.write(sid.strip())
+    except Exception:
+        pass
+
+def _ensure_session_id(force: bool = False) -> str:
+    """
+    Devuelve un session_id válido. Si force=True, siempre crea una nueva sesión
+    y la guarda en el archivo .totem_session.
+    """
+    if not force:
+        sid_env = (_get_env("TOTEM_SESSION_ID") or "").strip()
+        if sid_env:
+            return sid_env
+        sid_file = _read_session_from_file()
+        if sid_file:
+            return sid_file
+
+    # crear nueva
+    url = f"{_api_base()}/session/start"
+    payload = {"client": "live_test"}
+    r = requests.post(url, json=payload, timeout=20)
+    r.raise_for_status()
+    data = r.json()
+    sid = data.get("session_id") or data.get("id") or data.get("session") or ""
+    if not sid:
+        raise RuntimeError(f"Respuesta inesperada en /session/start: {data}")
+    _write_session_to_file(sid)
+    return sid
+
+def _send_to_ai(user_text: str) -> str:
+    """
+    Envía el texto a /chat/turn.
+    - Prioriza el esquema {'session_id', 'text'} (según tu 422).
+    - Si responde 404 'session not found', crea nueva sesión y reintenta una vez.
+    - Si responde 422, imprime el detalle para ver qué campo falta.
+    """
+    def _post_with_sid(sid: str, body: dict) -> requests.Response:
+        url = f"{_api_base()}/chat/turn"
+        return requests.post(url, json=body, timeout=40)
+
+    # Orden de prueba: primero el que pide tu backend
+    payload_shapes = [
+        lambda sid: {"session_id": sid, "text": user_text},      # <-- principal
+        lambda sid: {"session_id": sid, "user_input": user_text},
+        lambda sid: {"session": sid, "user_input": user_text},
+        lambda sid: {"sessionId": sid, "userInput": user_text},
+        lambda sid: {"session_id": sid, "message": user_text},
+        lambda sid: {"session_id": sid, "input": user_text},
+    ]
+
+    # 1) asegurar/obtener sesión
+    sid = _ensure_session_id(force=False)
+
+    last_err = None
+    for shape in payload_shapes:
+        body = shape(sid)
+        try:
+            r = _post_with_sid(sid, body)
+            if r.status_code == 200:
+                data = r.json()
+                return (
+                    data.get("assistant")
+                    or data.get("reply")
+                    or data.get("answer")
+                    or data.get("text")
+                    or json.dumps(data, ensure_ascii=False)
+                )
+
+            # 404 session not found -> crear nueva sesión y reintentar UNA vez con el mismo shape
+            try:
+                err_json = r.json()
+            except Exception:
+                err_json = {"detail": r.text}
+
+            if r.status_code == 404 and isinstance(err_json.get("detail"), str) and "session" in err_json["detail"].lower():
+                sid = _ensure_session_id(force=True)
+                body_retry = shape(sid)
+                r2 = _post_with_sid(sid, body_retry)
+                if r2.status_code == 200:
+                    data = r2.json()
+                    return (
+                        data.get("assistant")
+                        or data.get("reply")
+                        or data.get("answer")
+                        or data.get("text")
+                        or json.dumps(data, ensure_ascii=False)
+                    )
+                else:
+                    try:
+                        err2 = r2.json()
+                    except Exception:
+                        err2 = {"detail": r2.text}
+                    print(f"⚠️ /chat/turn rechazó (retry) payload {body_retry} -> status={r2.status_code}, detail={err2}\n")
+                    last_err = f"status={r2.status_code}, tried_body={body_retry}, detail={err2}"
+                    continue
+
+            # otros códigos (incluye 422 con detalle de Pydantic)
+            print(f"⚠️ /chat/turn rechazó payload {body} -> status={r.status_code}, detail={err_json}\n")
+            last_err = f"status={r.status_code}, tried_body={body}, detail={err_json}"
+
+        except Exception as e:
+            last_err = f"exception={e}"
+
+    raise RuntimeError(f"No pude entregar a /chat/turn con ninguno de los esquemas: {last_err}")
+
+# -------------------- Modo record (E2E) --------------------
+def mode_record(args):
+    # Defaults desde .env si no los pasan por CLI
+    device = args.device
+    if device is None:
+        dev_env = _get_env("MIC_DEVICE")
+        if dev_env not in (None, "", "None"):
+            try:
+                device = int(dev_env)
+            except Exception:
+                device = None
+    rate = args.rate if args.rate is not None else int(_get_env("MIC_RATE", "44100"))
+
+    # Preflight suave
+    try:
+        sd.check_input_settings(device=device, samplerate=rate, channels=1, dtype="int16")
     except Exception as e:
-        print(f"❌ Configuración no soportada (device={args.device}, rate={args.rate}): {e}")
-        return
+        print(f"⚠️ Config no validada (device={device}, rate={rate}): {e}")
+
     print("✅ Sesión lista. ENTER para grabar | Ctrl+C para salir\n")
     while True:
         try:
@@ -337,8 +499,8 @@ def mode_record(args):
             return
         try:
             wav_path = _record_until_silence(
-                device=args.device,
-                sample_rate=args.rate,
+                device=device,
+                sample_rate=rate,
                 calib_ms=args.calib_ms,
                 start_factor=args.start_factor,
                 stop_factor=args.stop_factor,
@@ -355,22 +517,27 @@ def mode_record(args):
 
         if not wav_path:
             print("⚠️  No llegó audio del stream; haré una captura directa de 5 s y la transcribo…")
-            wav_path = _record_fixed_seconds(args.device, args.rate, secs=5, channels=1, dtype="int16")
+            wav_path = _record_fixed_seconds(device, rate, secs=5, channels=1, dtype="int16")
 
         print(f"💾 Guardado: {wav_path}")
         try:
             text = _transcribe(wav_path)
             print(f"📝 Transcripción: {text}\n")
+            try:
+                ai_reply = _send_to_ai(text)
+                print(f"🤖 IA: {ai_reply}\n")
+            except Exception as e:
+                print(f"⚠️ No se pudo enviar a la IA ({_api_base()}): {e}\n")
         except Exception as e:
             print(f"❌ Error en transcripción: {e}\n")
 
-# ---------- main ----------
+# -------------------- main --------------------
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--mode", choices=["list", "diag", "meter", "record"], default="record")
-    ap.add_argument("--list", action="store_true", help="Alias: lista dispositivos y sale")
+    ap.add_argument("--list", action="store_true", help="Alias de --mode list")
     ap.add_argument("--device", type=int, default=None)
-    ap.add_argument("--rate", type=int, default=44100)
+    ap.add_argument("--rate", type=int, default=None)
     # diag
     ap.add_argument("--secs", type=float, default=1.0)
     # meter
@@ -387,16 +554,12 @@ def main():
     ap.add_argument("--debug", action="store_true")
     args = ap.parse_args()
 
-    if args.list:
-        mode_list()
-        return
-
-    if args.mode == "list":
+    if args.list or args.mode == "list":
         mode_list()
     elif args.mode == "diag":
-        mode_diag(args.device, args.rate, args.secs)
+        mode_diag(args.device, args.rate or 44100, args.secs)
     elif args.mode == "meter":
-        mode_meter(args.device, args.rate, args.frame_ms)
+        mode_meter(args.device, args.rate or 44100, args.frame_ms)
     else:
         mode_record(args)
 

@@ -13,6 +13,7 @@ __pycache__/
 venv*/
 .env
 .env.*
+.venv311/
 
 # VSCode / IDE
 .vscode/
