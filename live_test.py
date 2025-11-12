@@ -383,6 +383,15 @@ def _ensure_session_id(force: bool = False) -> str:
         if sid_file:
             return sid_file
 
+def _ensure_session_id() -> str:
+    # Prioridad: ENV -> archivo -> /session/start
+    sid_env = (_get_env("TOTEM_SESSION_ID") or "").strip()
+    if sid_env:
+        return sid_env
+    sid_file = _read_session_from_file()
+    if sid_file:
+        return sid_file
+
     # crear nueva
     url = f"{_api_base()}/session/start"
     payload = {"client": "live_test"}
@@ -396,6 +405,7 @@ def _ensure_session_id(force: bool = False) -> str:
     return sid
 
 def _send_to_ai(user_text: str) -> str:
+
     """
     Envía el texto a /chat/turn.
     - Prioriza el esquema {'session_id', 'text'} (según tu 422).
@@ -470,6 +480,22 @@ def _send_to_ai(user_text: str) -> str:
             last_err = f"exception={e}"
 
     raise RuntimeError(f"No pude entregar a /chat/turn con ninguno de los esquemas: {last_err}")
+
+    """Envía texto a /chat/turn con {session_id, user_input} y devuelve la respuesta textual."""
+    sid = _ensure_session_id()
+    url = f"{_api_base()}/chat/turn"
+    body = {"session_id": sid, "user_input": user_text}
+    r = requests.post(url, json=body, timeout=40)
+    r.raise_for_status()
+    data = r.json()
+    return (
+        data.get("assistant")
+        or data.get("reply")
+        or data.get("answer")
+        or data.get("text")
+        or json.dumps(data, ensure_ascii=False)
+    )
+
 
 # -------------------- Modo record (E2E) --------------------
 def mode_record(args):

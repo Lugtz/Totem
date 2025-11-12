@@ -1,39 +1,7 @@
-# Python
+﻿.venv/
 __pycache__/
-*.py[cod]
-*.pyd
-*.pyo
-*.egg-info/
-.mypy_cache/
-.pytest_cache/
+*.pyc
+core/outputs/
 *.log
-
-# Entornos / secretos
-.venv*/
-venv*/
-.env
-.env.*
-.venv311/
-
-# VSCode / IDE
-.vscode/
-.idea/
-
-# Jupyter
-.ipynb_checkpoints/
-
-# FastAPI / DB locales
-*.sqlite3
-*.db
-instance/
-
-# Windows
-Thumbs.db
-Desktop.ini
-
-# Blender backups
-*.blend1
-*.blend2
-*.blend@
-
-Config/secrets.json
+*.wav
+*.mp3

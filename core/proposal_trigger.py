@@ -1,25 +1,38 @@
-import os, requests, time
+# core/proposal_trigger.py
+import os, json, requests
 from core.logger import get_logger
 
 LOG = get_logger(__name__)
-FLOW_URL = os.getenv("FLOW_URL")
-WRITER_DOC_ID = os.getenv("WRITER_DOC_ID")
 
-def trigger(slots: dict) -> str | None:
-    if not FLOW_URL:
-        LOG.error({"evt":"flow_missing"})
+CATALYST_URL = (
+    "https://ai3-897327580.development.catalystserverless.com/server/ai_3_function/open-proposal-fields"
+)
+
+def trigger(slots: dict):
+    try:
+        payload = {"payload": slots}
+        LOG.info({"evt": "proposal_trigger_start", "payload": payload})
+
+        res = requests.post(CATALYST_URL, json=payload, timeout=60)
+        LOG.info({"evt": "proposal_trigger_response", "status": res.status_code})
+
+        if res.status_code != 200:
+            LOG.error({"evt": "proposal_trigger_http_error", "body": res.text[:300]})
+            return None
+
+        data = res.json()
+        if not data.get("ok"):
+            LOG.error({"evt": "proposal_trigger_ai_error", "data": data})
+            return None
+
+        # Simulación: guardar el JSON generado en un archivo temporal
+        out_path = "data/outputs/last_proposal_fields.json"
+        os.makedirs(os.path.dirname(out_path), exist_ok=True)
+        with open(out_path, "w", encoding="utf-8") as f:
+            json.dump(data["fields"], f, ensure_ascii=False, indent=2)
+
+        LOG.info({"evt": "proposal_trigger_success", "out": out_path})
+        return out_path  # Devolvemos la ruta del JSON generado localmente
+    except Exception as e:
+        LOG.error({"evt": "proposal_trigger_error", "error": str(e)})
         return None
-    payload = {"slots": slots, "writer_doc_id": WRITER_DOC_ID, "send_email": False, "channel": "stand_ia3"}
-    for attempt in range(1, 4):
-        try:
-            r = requests.post(FLOW_URL, json=payload, timeout=15)
-            try:
-                body = r.json()
-            except Exception:
-                body = {}
-            if 200 <= r.status_code < 300:
-                return body.get("proposalPdfUrl") or body.get("pdf_url") or body.get("url")
-        except Exception as e:
-            LOG.warning({"evt":"flow_err","attempt":attempt,"err":str(e)})
-            time.sleep(0.5 * attempt)
-    return None
