@@ -1,0 +1,13 @@
+{
+  "response": "Perfecto. Puedo prepararte una propuesta personalizada. ¿Podrías decirme tu nombre?",
+  "slots": {},
+  "missing": [
+    "Name",
+    "Nombre de la empresa",
+    "Email",
+    "Solucion a implementar",
+    "Duracion",
+    "Precio",
+    "Moneda"
+  ]
+}
