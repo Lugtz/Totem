@@ -1,5 +1,5 @@
 {
-  "files.autoSave": "off",
+  "files.autoSave": "afterDelay",
   "editor.formatOnSave": false,
   "files.saveConflictResolution": "overwriteFileOnDisk"
 }
