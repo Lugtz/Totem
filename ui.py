@@ -33,6 +33,10 @@ except Exception as e:
 
 globalClock = ClockObject.getGlobalClock()
 
+# instancia global opcional para usar como "función"
+APP_INSTANCE = None
+
+
 class TextVisemeDemo(ShowBase):
     def __init__(self, glb_path, bg_path=None):
         ShowBase.__init__(self)
@@ -245,9 +249,10 @@ class TextVisemeDemo(ShowBase):
 
         self._build_char_viseme_map()
 
-        # Hilo que lee texto desde terminal
-        t = threading.Thread(target=self._input_thread, daemon=True)
-        t.start()
+        # --- IMPORTANTE: ya NO arrancamos hilo de input aquí ---
+        # Si quisieras usar input por consola, puedes lanzar el hilo fuera:
+        # t = threading.Thread(target=self._input_thread, daemon=True)
+        # t.start()
 
         # Controles y cámara
         self.accept("wheel_up", self._zoom_in)
@@ -269,7 +274,7 @@ class TextVisemeDemo(ShowBase):
         self._update_status(prefix=f"GLB: {os.path.basename(glb_path)} | Modo: TEXTO")
 
         print("\n🧠 Nacho listo.")
-        print("Escribe una frase en la terminal y presiona Enter para que la 'lea'.\n")
+        print("Puedes llamarlo desde otro módulo usando enqueue_text() o speak_text().\n")
 
     # ----- Fondo card pegado a cámara -----
     def _setup_background_card(self, image_path: str):
@@ -381,21 +386,48 @@ class TextVisemeDemo(ShowBase):
     def _text_to_viseme_sequence(self, text: str):
         seq = deque()
         vowels = set("aeiouáéíóú")
+        speed_factor = 4 # 2x más rápido
+
         for ch in text.lower():
             if ch.isspace():
-                seq.append(("REST", 0.06))
+                seq.append(("REST", 0.06 / speed_factor))   # 0.03
                 continue
             key = self.char_to_viseme.get(ch, "MID")
             if ch in vowels:
-                dur = 0.13
-            elif key in ("BMP","FV"):
-                dur = 0.10
+                dur = 0.13 / speed_factor                  # 0.065
+            elif key in ("BMP", "FV"):
+                dur = 0.10 / speed_factor                  # 0.05
             else:
-                dur = 0.08
+                dur = 0.08 / speed_factor                  # 0.04
             seq.append((key, dur))
+
         # pequeño descanso al final
-        seq.append(("REST", 0.18))
+        seq.append(("REST", 0.18 / speed_factor))          # 0.09
         return seq
+
+
+
+    # ============ NUEVO: API pública para hablar por texto ============
+    def enqueue_text(self, text: str, clear_queue: bool = False):
+        """
+        Encola una frase para que Nacho la 'lea' con visemas.
+        Si clear_queue=True, vacía primero la cola actual.
+        """
+        text = (text or "").strip()
+        if not text:
+            return
+        seq = self._text_to_viseme_sequence(text)
+        with self._viseme_lock:
+            if clear_queue:
+                self.viseme_seq.clear()
+            self.viseme_seq.extend(seq)
+
+    def speak_text(self, text: str, clear_queue: bool = False):
+        """
+        Alias de convenience: igual que enqueue_text().
+        """
+        self.enqueue_text(text, clear_queue=clear_queue)
+    # ================================================================
 
     def _input_thread(self):
         print("Escribe texto y Nacho lo 'lee' con la boca (sin audio).")
@@ -410,9 +442,8 @@ class TextVisemeDemo(ShowBase):
             line = line.strip()
             if not line:
                 continue
-            seq = self._text_to_viseme_sequence(line)
-            with self._viseme_lock:
-                self.viseme_seq.extend(seq)
+            # Reutilizamos la API nueva:
+            self.enqueue_text(line)
 
     # ---------- Aplicación parámetros → huesos ----------
     def _apply_params(self, params, open_amount):
@@ -705,9 +736,40 @@ class TextVisemeDemo(ShowBase):
         self.camera.lookAt(0,0,1.5)
         return Task.cont
 
+
+# ---------- API SENCILLA PARA OTROS MÓDULOS ----------
+def start_viewer(glb_path: str = GLB_PATH, bg_path: str = BG_PATH):
+    """
+    Crea el visor global y entra en el loop de Panda3D.
+    Normalmente la llamas en un hilo aparte:
+        threading.Thread(target=start_viewer, daemon=True).start()
+    """
+    global APP_INSTANCE
+    APP_INSTANCE = TextVisemeDemo(glb_path, bg_path)
+    APP_INSTANCE.run()
+
+def speak(text: str, clear_queue: bool = False):
+    """
+    Función global que otros módulos pueden llamar:
+
+        from ui_nacho import speak
+        speak("Hola, soy Nacho")
+
+    """
+    if APP_INSTANCE is None:
+        print("⚠ El visor aún no está inicializado. Llama primero a start_viewer().")
+        return
+    APP_INSTANCE.enqueue_text(text, clear_queue=clear_queue)
+
+
+# ---------- MODO STANDALONE (con input por consola) ----------
 if __name__ == "__main__":
     app = TextVisemeDemo(
         GLB_PATH,
         bg_path=BG_PATH
     )
+    # Solo en modo standalone queremos leer de la consola:
+    t = threading.Thread(target=app._input_thread, daemon=True)
+    t.start()
+    APP_INSTANCE = app
     app.run()

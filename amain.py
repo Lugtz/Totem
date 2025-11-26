@@ -12,7 +12,9 @@ from pydantic import BaseModel
 
 from core.logger import get_logger
 from core.dialog_engine import procesar_turno_dialogo, CAMPOS_REQUERIDOS
-from core.camera_agent import iniciar_detector
+from core.camera_agent import iniciar_detector  # Detector de personas (YOLO + cámara)
+# ❌ Ya NO usamos TTS aquí para evitar duplicados.
+# from core.tts_engine import speak  # 🔊 TTS (se usa solo desde core.camera_agent)
 
 logger = get_logger(__name__)
 
@@ -31,7 +33,7 @@ except Exception as e:
 
 try:
     from core.infographic_engine import generar_infografia_png  # type: ignore
-    logger.info("amain: generar_infografia_png importado correctamente.")
+    logger.info("amain: generar_infografia_generada importado correctamente.")
 except Exception as e:
     generar_infografia_png = None  # type: ignore
     logger.warning(
@@ -151,7 +153,7 @@ def _normalizar_respuesta_dialog_engine(
     1) dict con llaves: assistant_text/reply, slots, campos_pendientes, ready_for_proposal
     2) tupla/lista: (assistant_text, slots, campos_pendientes, campos_completos)
     """
-    # Caso 1: dict (por si en algún momento usas la versión de Responses API)
+    # Caso 1: dict
     if isinstance(raw_resp, dict):
         assistant_text = (
             raw_resp.get("assistant_text")
@@ -271,7 +273,7 @@ async def chat_turn(payload: ChatTurnRequest):
     """
     Turno de diálogo:
     - Recibe el texto del usuario (ya transcrito por ASR).
-    - Llama a core.dialog_engine.procesar_turno_dialogo(...)
+    - Llama a core.dialog_engine.procesar_turno_dialogo(...).
     - Regresa la respuesta en texto y banderas de control.
     - Si ya tenemos nombre y empresa, DISPARA LA PROPUESTA y la INFOGRAFÍA
       (una sola vez cada una por sesión), AUNQUE haya campos pendientes.
@@ -279,6 +281,7 @@ async def chat_turn(payload: ChatTurnRequest):
     IMPORTANTE:
     - Acepta tanto "texto_usuario" como "texto" en el body.
       Esto evita el error 422 con la versión actual de core.camera_agent.
+    - NO hace TTS aquí. El TTS lo maneja core.camera_agent para evitar duplicados.
     """
     session_id = payload.session_id
     texto_usuario = (payload.texto_usuario or payload.texto or "").strip()
@@ -322,6 +325,12 @@ async def chat_turn(payload: ChatTurnRequest):
             status_code=500,
             detail=f"Error procesando el diálogo: {e}",
         )
+
+    # 🔇 IMPORTANTE:
+    # Aquí YA NO llamamos a speak(assistant_text).
+    # El módulo core.camera_agent se encarga de:
+    #   - imprimir "🤖 Nacho: ..."
+    #   - llamar a core.tts_engine.speak(assistant_text)
 
     # ------------------------------------------------------
     # 2) Disparo de propuesta e infografía
@@ -392,7 +401,22 @@ async def chat_turn(payload: ChatTurnRequest):
             )
 
     # ------------------------------------------------------
-    # 3) Respuesta al front / cámara
+    # 3) Calcular progreso para el panel (opcional)
+    #    Usamos CAMPOS_REQUERIDOS como referencia de total
+    # ------------------------------------------------------
+    try:
+        campos_totales = len(CAMPOS_REQUERIDOS) or 1
+        campos_llenos = sum(
+            1 for campo in CAMPOS_REQUERIDOS if slots.get(campo)
+        )
+        progreso = campos_llenos / campos_totales
+    except Exception:
+        campos_totales = 1
+        campos_llenos = 0
+        progreso = 0.0
+
+    # ------------------------------------------------------
+    # 4) Respuesta al front / cámara
     # ------------------------------------------------------
     respuesta: dict[str, Any] = {
         "session_id": session_id,
@@ -401,6 +425,10 @@ async def chat_turn(payload: ChatTurnRequest):
         "slots": slots,
         "campos_pendientes": campos_pendientes,
         "campos_completos": bool(campos_completos),
+        # Progreso para el panel
+        "campos_totales": campos_totales,
+        "campos_llenos": campos_llenos,
+        "progreso": progreso,  # 0.0–1.0
         # Por ahora el flujo de voz no usa 'terminar', lo dejamos siempre False
         "terminar": False,
         "resultado_bruto": [
