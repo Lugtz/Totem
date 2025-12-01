@@ -9,14 +9,19 @@ from typing import Optional, Any, Dict, List
 
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
+import httpx # Cliente HTTP asíncrono
 
 from core.logger import get_logger
 from core.dialog_engine import procesar_turno_dialogo, CAMPOS_REQUERIDOS
 from core.camera_agent import iniciar_detector  # Detector de personas (YOLO + cámara)
+import urllib.parse
+import os
+
 # ❌ Ya NO usamos TTS aquí para evitar duplicados.
 # from core.tts_engine import speak  # 🔊 TTS (se usa solo desde core.camera_agent)
 
 logger = get_logger(__name__)
+NACHO_BASE_URL = os.getenv("NACHO_BASE_URL", "http://localhost:7000").rstrip("/")
 
 # ----------------------------------------------------------
 # Import opcional de funciones de propuesta / infografía
@@ -229,6 +234,8 @@ async def on_startup() -> None:
     logger.info("🚀 Totem Evolución IA3 iniciado correctamente.")
     logger.info("🎥 Activando detector de personas...")
     try:
+        # Nota: Si iniciar_detector() es una función síncrona que bloquea
+        # el hilo por mucho tiempo, idealmente debe ser envuelta en asyncio.to_thread().
         iniciar_detector()
     except Exception:
         logger.exception("Error al iniciar el detector de personas.")
@@ -268,6 +275,55 @@ async def session_start():
     }
 
 
+async def _enviar_slots_al_ui(respuesta: dict) -> None:
+    """
+    Empuja al visor (ui.py) la info básica del lead para el panel CRM.
+    
+    ¡IMPORTANTE! Ahora es una función asíncrona usando httpx para evitar bloqueos.
+
+    Usa el servidor HTTP de Nacho en NACHO_BASE_URL (por defecto http://localhost:7000).
+    NO lanza excepciones hacia afuera (solo loguea).
+    """
+    try:
+        slots = respuesta.get("slots") or {}
+        if not isinstance(slots, dict):
+            return
+
+        email = slots.get("correo") or slots.get("email") or ""
+        nombre = slots.get("nombre") or slots.get("name") or ""
+        empresa = slots.get("empresa") or slots.get("company") or ""
+
+        pendientes = respuesta.get("campos_pendientes") or []
+        progreso = respuesta.get("progreso", None)
+
+        partes_estado = []
+        if pendientes:
+            partes_estado.append("Pendientes: " + ", ".join(pendientes))
+        if isinstance(progreso, (int, float)):
+            partes_estado.append(f"Progreso: {int(round(progreso * 100))}%")
+
+        proposal = " | ".join(partes_estado)
+
+        data = {
+            "email": email,
+            "name": nombre,
+            "company": empresa,
+            "proposal": proposal,
+        }
+
+        query = urllib.parse.urlencode(data, doseq=False, safe="")
+        url = f"{NACHO_BASE_URL}/crm?{query}"
+
+        logger.info("[UI] Enviando datos CRM al visor: %s", url)
+
+        # GET rápido ASÍNCRONO y si falla NO rompemos el backend
+        async with httpx.AsyncClient(timeout=0.5) as client:
+            await client.get(url)
+
+    except Exception as e:
+        logger.warning("[UI] No se pudo notificar CRM al visor: %s", e)
+
+
 @app.post("/chat/turn")
 async def chat_turn(payload: ChatTurnRequest):
     """
@@ -284,9 +340,10 @@ async def chat_turn(payload: ChatTurnRequest):
     - NO hace TTS aquí. El TTS lo maneja core.camera_agent para evitar duplicados.
     """
     session_id = payload.session_id
-    texto_usuario = (payload.texto_usuario or payload.texto or "").strip()
+    # El texto limpio, que se usa para llamar a procesar_turno_dialogo
+    texto_usuario_limpio = (payload.texto_usuario or payload.texto or "").strip()
 
-    if not texto_usuario:
+    if not texto_usuario_limpio:
         raise HTTPException(
             status_code=400,
             detail="El cuerpo debe incluir 'texto_usuario' o 'texto' con contenido.",
@@ -295,14 +352,14 @@ async def chat_turn(payload: ChatTurnRequest):
     logger.info(
         "Turno de diálogo recibido. session_id=%s, texto='%s'",
         session_id,
-        texto_usuario,
+        texto_usuario_limpio,
     )
 
     # ------------------------------------------------------
     # 1) Llamar al motor de diálogo y normalizar respuesta
     # ------------------------------------------------------
     try:
-        raw_resp = procesar_turno_dialogo(session_id, texto_usuario)
+        raw_resp = procesar_turno_dialogo(session_id, texto_usuario_limpio)
         assistant_text, slots, campos_pendientes, campos_completos = (
             _normalizar_respuesta_dialog_engine(raw_resp)
         )
@@ -326,15 +383,9 @@ async def chat_turn(payload: ChatTurnRequest):
             detail=f"Error procesando el diálogo: {e}",
         )
 
-    # 🔇 IMPORTANTE:
-    # Aquí YA NO llamamos a speak(assistant_text).
-    # El módulo core.camera_agent se encarga de:
-    #   - imprimir "🤖 Nacho: ..."
-    #   - llamar a core.tts_engine.speak(assistant_text)
-
     # ------------------------------------------------------
     # 2) Disparo de propuesta e infografía
-    #    (aquí YA se tienen los slots actualizados)
+    #    (aquí YA se tienen los slots actualizados)
     # ------------------------------------------------------
     meta = _get_sesion_meta(session_id)
     ready_minimos = _tiene_minimos_para_propuesta(slots)
@@ -383,7 +434,7 @@ async def chat_turn(payload: ChatTurnRequest):
                 session_id,
             )
             try:
-                # Suponiendo que generar_infografia_png es síncrona (PIL)
+                # Se usa asyncio.to_thread para no bloquear el bucle de eventos con la tarea síncrona
                 await asyncio.to_thread(generar_infografia_png, slots)  # type: ignore[arg-type]
                 logger.info(
                     "[%s] generar_infografia_png finalizó (PNG/PDF generados).",
@@ -402,7 +453,7 @@ async def chat_turn(payload: ChatTurnRequest):
 
     # ------------------------------------------------------
     # 3) Calcular progreso para el panel (opcional)
-    #    Usamos CAMPOS_REQUERIDOS como referencia de total
+    #    Usamos CAMPOS_REQUERIDOS como referencia de total
     # ------------------------------------------------------
     try:
         campos_totales = len(CAMPOS_REQUERIDOS) or 1
@@ -418,26 +469,36 @@ async def chat_turn(payload: ChatTurnRequest):
     # ------------------------------------------------------
     # 4) Respuesta al front / cámara
     # ------------------------------------------------------
-    respuesta: dict[str, Any] = {
-        "session_id": session_id,
-        "texto_usuario": texto_usuario,
-        "respuesta": assistant_text,
-        "slots": slots,
-        "campos_pendientes": campos_pendientes,
-        "campos_completos": bool(campos_completos),
-        # Progreso para el panel
-        "campos_totales": campos_totales,
-        "campos_llenos": campos_llenos,
-        "progreso": progreso,  # 0.0–1.0
-        # Por ahora el flujo de voz no usa 'terminar', lo dejamos siempre False
-        "terminar": False,
-        "resultado_bruto": [
-            assistant_text,
-            slots,
-            campos_pendientes,
-            bool(campos_completos),
-        ],
+    # FIX: Se usa 'payload' en lugar de la variable indefinida 'req'.
+    # Usamos el valor original del campo texto_usuario o texto (si texto_usuario es None)
+    input_text_for_response = payload.texto_usuario if payload.texto_usuario is not None else payload.texto
+    
+    respuesta = {
+    "session_id": session_id,
+    "texto_usuario": input_text_for_response,
+    "respuesta": assistant_text,
+    "slots": slots,
+    "campos_pendientes": campos_pendientes,
+    "campos_completos": bool(campos_completos),
+    "campos_totales": campos_totales,
+    "campos_llenos": campos_llenos,
+    "progreso": progreso,  # 0.0–1.0
+    # Por ahora el flujo de voz no usa 'terminar', lo dejamos siempre False
+    "terminar": False,
+    "resultado_bruto": [
+        assistant_text,
+        slots,
+        campos_pendientes,
+        bool(campos_completos),
+    ],
     }
+    # 5) Empujar estado al visor (panel CRM abajo del UI)
+    try:
+        # La función _enviar_slots_al_ui es asíncrona (usa httpx), por eso requiere await
+        await _enviar_slots_al_ui(respuesta)
+    except Exception:
+        # Nunca queremos tumbar el backend solo por un problema visual
+        logger.exception("Error al enviar datos al panel CRM del visor")
 
     logger.info("Respuesta normalizada para /chat/turn: %r", respuesta)
 

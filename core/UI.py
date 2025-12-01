@@ -32,6 +32,7 @@ CRM_BORDER_BG = (0.92, 0.96, 0.98, 1.0)
 # Fracción de altura de pantalla que ocupa el CRM (33%)
 PANEL_HEIGHT_FRACTION = 0.33  # 33% de la altura total (-1 a 1 en aspect2d)
 
+
 def clamp(x, lo, hi):
     return max(lo, min(hi, x))
 
@@ -148,14 +149,6 @@ class TextVisemeDemo(ShowBase):
         self.jaw_atten  = 0.60 * self.MOVEMENT_SCALE
         self.chin_atten = 0.60 * self.MOVEMENT_SCALE
 
-        # --- NUEVO: parámetros de micro-movimientos / respiración ---
-        self.idle_breath_freq = 0.12                     # frecuencia respiración base
-        self.idle_breath_amp  = 0.004 * self.MOVEMENT_SCALE  # amplitud subida/bajada pecho
-        self.idle_shift_amp   = 0.0025 * self.MOVEMENT_SCALE  # shift muy leve izquierda/derecha
-
-        self.micro_head_amp   = 0.40 * self.MOVEMENT_SCALE   # máx ~0.4° de micro tilt
-        self.micro_head_freq  = 0.35                         # frecuencia cabeza micro
-
         # ====== HUESOS LABIOS / MANDÍBULA / CARA ======
         self.upper_L = self._find(["lip.T.L", "lip.T.L.001"])
         self.upper_R = self._find(["lip.T.R", "lip.T.R.001"])
@@ -218,15 +211,15 @@ class TextVisemeDemo(ShowBase):
                     self.base_pos[name] = j.getPos()
 
         # ====== HOMBROS EN POSE FIJA ======
-        self.SHO_L_ROT_X = -20.0
-        self.SHO_L_ROT_Y = 30.0
+        self.SHO_L_ROT_X = 0.0
+        self.SHO_L_ROT_Y = 0.0
         self.SHO_L_ROT_Z = 70.0
         self.SHO_L_SIGN_X = +1.0
         self.SHO_L_SIGN_Y = +1.0
         self.SHO_L_SIGN_Z = +1.0
 
-        self.SHO_R_ROT_X = 20.0
-        self.SHO_R_ROT_Y = 30.0
+        self.SHO_R_ROT_X = 0.0
+        self.SHO_R_ROT_Y = 0.0
         self.SHO_R_ROT_Z = -70.0
         self.SHO_R_SIGN_X = +1.0
         self.SHO_R_SIGN_Y = +1.0
@@ -673,10 +666,10 @@ class TextVisemeDemo(ShowBase):
         """
         Lenguaje corporal desde la columna hasta las manos.
 
-        Versión relajada + micro-movimientos:
+        Versión relajada:
         - Cabeza más tranquila (menos amplitud y menor frecuencia).
-        - Brazos con movimientos suaves y lentos.
-        - Micro respiración e “inconscientes” shifts de peso incluso en REST.
+        - Brazos con movimientos un poco más amplios pero MUCHO más lentos y prolongados.
+        - Brazos y antebrazos siguen usando eje principal P (pitch) para que se sienta más "eje Z visual".
         """
 
         # ------ CONFIG DE EJES SOLO PARA BRAZOS ------
@@ -688,10 +681,12 @@ class TextVisemeDemo(ShowBase):
         ARM_HAND_SECOND_AXIS     = "R"
 
         # --- CONFIG DE VELOCIDADES Y RANGOS ---
-        ARM_SPEED        = 0.03       # brazos muy lentos
-        ARM_RANGE        = 0.70
-        FOREARM_SPEED    = 0.05
-        SMALL_NOISE_FREQ = 0.10
+        # Brazos muy lentos y suaves
+        ARM_SPEED = 0.03
+        # frecuencia de la onda principal de brazos (baja -> más lento)
+        ARM_RANGE        = 0.70      # un poco más de amplitud que antes
+        FOREARM_SPEED    = 0.05        # antebrazos algo más lentos
+        SMALL_NOISE_FREQ = 0.10        # ruidito fino (manos) más lento también
 
         MOVEMENT_FLIP = 1
 
@@ -710,67 +705,47 @@ class TextVisemeDemo(ShowBase):
                     choices = modes
                 self._gesture_mode = random.choice(choices)
                 self._last_gesture_mode = self._gesture_mode
+                # Cambios de gesto más prolongados
                 self._gesture_mode_t = now + random.uniform(3.5, 5.0)
 
         mode = self._gesture_mode
 
-        # ---------------- RESPIRACIÓN / MICRO-SWAY GLOBAL ----------------
-        # Respiración base SIEMPRE, se mezcla con el sway existente
-        idle_phase  = t * self.idle_breath_freq + self._gesture_offset
-        idle_breath = math.sin(idle_phase)
-        idle_shift  = math.sin(idle_phase * 0.7 + 1.0)
-
-        # sway lento general
+        # ---------------- BASE CUERPO / COLUMNA ----------------
+        # Más lento que antes para que todo se sienta relajado
         body_t  = t * 0.06 + self._gesture_offset
         small_t = t * SMALL_NOISE_FREQ
 
         sway_yaw   = MOVEMENT_FLIP * 1.0 * s * math.sin(body_t)
         sway_pitch = 0.7 * s * math.sin(body_t * 0.7 + 0.8)
-        lift_base  = 0.0020 * s * math.sin(body_t * 0.9)
+        lift       = 0.0020 * s * math.sin(body_t * 0.9)
 
-        # respiración vertical + micro shift lateral (pecho / peso)
-        breath_lift  = self.idle_breath_amp * idle_breath
-        breath_shift = self.idle_shift_amp  * idle_shift
-
-        # ---------------- COLUMNA (spine) ----------------
-        for i, (name, j) in enumerate(self.spine_bones):
+        for name, j in self.spine_bones:
             bh, bp, br    = self.base_hpr[name]
             bpx, bpy, bpz = self.base_pos[name]
-
-            # los huesos más altos respiran un poco más
-            height_factor = 0.4 + 0.6 * (i / max(1, len(self.spine_bones) - 1))
-
-            z_offset = lift_base + breath_lift * height_factor
-            x_offset = breath_shift * 0.6 * height_factor
-
             j.setHpr(bh + sway_yaw * 0.4, bp + sway_pitch * 0.6, br)
-            j.setPos(bpx + x_offset, bpy, bpz + z_offset)
+            j.setPos(bpx, bpy, bpz + lift)
 
-        # ---------------- CABEZA MÁS RELAJADA + MICRO JITTER ----------------
+        # ---------------- CABEZA MÁS RELAJADA ----------------
+        # Menor amplitud y menor frecuencia
         head_t = t * (0.05 + 0.06 * speak_level) + self._gesture_offset * 0.3
 
-        head_nod_amp  = (0.5 + 0.9 * speak_level) * s
-        head_turn_amp = (0.4 * speak_level) * s
+        head_nod_amp  = (0.5 + 0.9 * speak_level) * s      # antes ~1.0+1.4
+        head_turn_amp = (0.4 * speak_level) * s            # antes 0.7*speak_level
 
         head_nod  = head_nod_amp * math.sin(head_t)
         head_turn = MOVEMENT_FLIP * head_turn_amp * math.sin(head_t * 0.8 + 1.5)
 
-        # micro-movimientos de cabeza (solo si está más tranquilo)
-        idle_factor = (1.0 - speak_level)
-        micro_nod   = self.micro_head_amp * idle_factor * math.sin(self.micro_head_freq * t * 2.0 + 1.3)
-        micro_turn  = self.micro_head_amp * idle_factor * math.sin(self.micro_head_freq * t * 2.4 + 2.2)
-
         for name, j in self.head_bones:
             bh, bp, br = self.base_hpr[name]
-            j.setHpr(
-                bh + head_turn + micro_turn,
-                bp + head_nod + micro_nod,
-                br
-            )
+            j.setHpr(bh + head_turn, bp + head_nod, br)
+
+        # ---------------- RESPIRACIÓN / PECHO ----------------
+        chest_open = (2.5 + 3.0 * speak_level) * s
+        breath     = (1.0 + 0.7 * speak_level) * s * math.sin(body_t * 0.9)
 
         # ---------------- PARÁMETROS GLOBALES DE HABLA ----------------
-        AMP       = 8.0
-        base_talk = (2.5 + 4.0 * speak_level) * s
+        AMP       = 8.0                               # un poco menos agresivo
+        base_talk = (2.5 + 4.0 * speak_level) * s     # antes 3.5 + 6.0
         talk_amp  = AMP * base_talk
 
         # Factores por modo de gesto
@@ -790,6 +765,7 @@ class TextVisemeDemo(ShowBase):
             l_factor = r_factor = 0.22
 
         # ---------------- ONDA LENTA PARA BRAZOS ----------------
+        # Periodo ~30 segundos aprox → muy suave y prolongado
         arms_t   = t * ARM_SPEED + self._gesture_offset * 0.8
         arms_t_L = arms_t
         arms_t_R = arms_t + math.pi * 0.8
@@ -803,7 +779,7 @@ class TextVisemeDemo(ShowBase):
         arm_wave_L = MOVEMENT_FLIP * clamp(arm_wave_scalar_L * l_factor + arm_noise_L, -1.0, 1.0)
         arm_wave_R = MOVEMENT_FLIP * clamp(arm_wave_scalar_R * r_factor + arm_noise_R, -1.0, 1.0)
 
-        # ---------------- HOMBROS ----------------
+        # ---------------- HOMBROS (eje principal P → se siente "Z") ----------------
         for side, upper_arm, base_rot, wave in (
             ("L", self.upper_arm_L,
              (self.SHO_L_ROT_X, self.SHO_L_ROT_Y, self.SHO_L_ROT_Z),
@@ -824,18 +800,15 @@ class TextVisemeDemo(ShowBase):
                     base_P = bp + rot_y * self.SHO_R_SIGN_Y
                     base_R = br + rot_z * self.SHO_R_SIGN_Z
 
-                off_main = (talk_amp * 0.35 * wave)
-                off_sec  = (talk_amp * 0.25 * wave)
-
-                # un toque de respiración en los hombros, muy suave
-                off_main += (self.idle_breath_amp * 10.0 * idle_breath * 0.15)
-                off_sec  += (self.idle_breath_amp * 8.0  * idle_breath * 0.10)
+                off_main = (breath * 0.18 + talk_amp * 0.35 * wave)
+                off_sec  = (chest_open * 0.12 + talk_amp * 0.25 * wave)
 
                 off_main *= ARM_RANGE
                 off_sec  *= ARM_RANGE
 
                 H, P, R = base_H, base_P, base_R
 
+                # eje principal (P) → brazo sube/baja hacia delante/atrás muy suave
                 if ARM_UPPER_MAIN_AXIS == "H":
                     H += off_main
                 elif ARM_UPPER_MAIN_AXIS == "P":
@@ -843,6 +816,7 @@ class TextVisemeDemo(ShowBase):
                 elif ARM_UPPER_MAIN_AXIS == "R":
                     R += off_main
 
+                # eje secundario
                 if ARM_UPPER_SECOND_AXIS == "H":
                     H += off_sec
                 elif ARM_UPPER_SECOND_AXIS == "P":
@@ -854,7 +828,7 @@ class TextVisemeDemo(ShowBase):
 
         # ---------------- ANTEBRAZOS (CODO) ----------------
         forearm_base = t * FOREARM_SPEED
-        max_deg      = 35.0 * ARM_RANGE * speak_level
+        max_deg      = 35.0 * ARM_RANGE * speak_level  # amplitud controlada
 
         for side, forearm in (("L", self.forearm_L), ("R", self.forearm_R)):
             phase = 0.0 if side == "L" else math.pi * 0.7
@@ -1023,11 +997,12 @@ class TextVisemeDemo(ShowBase):
         """
         Panel tipo Zoho CRM en la parte baja (ocupa aprox. 33% de la altura total).
 
-        Campos visibles:
-        - Correo
+        Campos visibles (en pantalla):
         - Nombre
         - Empresa
-        - Propuesta
+        - Correo
+        - Teléfono
+        - Diagnóstico
         """
 
         self.crm_root = self.aspect2d.attachNewNode("crm_root")
@@ -1080,12 +1055,13 @@ class TextVisemeDemo(ShowBase):
         title_np.setPos(-0.76, 0, title_y + 0.005)
         title_np.setScale(0.055)
 
-        # Campos
+        # Campos: NOMBRE, EMPRESA, CORREO, TELÉFONO, DIAGNÓSTICO
         self._crm_fields = [
-            ("Correo",   "email"),
-            ("Nombre",   "name"),
-            ("Empresa",  "company"),
-            ("Propuesta","proposal"),
+            ("Nombre",      "nombre"),
+            ("Empresa",     "empresa"),
+            ("Correo",      "correo"),
+            ("Teléfono",    "telefono"),
+            ("Diagnóstico", "diagnostico"),
         ]
 
         self._crm_value_nodes = {}
@@ -1114,7 +1090,7 @@ class TextVisemeDemo(ShowBase):
             if self.ui_font is not None:
                 val_node.setFont(self.ui_font)
 
-            if key == "email":
+            if key == "correo":
                 val_node.setTextColor(*CRM_EMAIL_FG)
             else:
                 val_node.setTextColor(*CRM_VALUE_FG)
@@ -1127,10 +1103,10 @@ class TextVisemeDemo(ShowBase):
 
         # ===== Escala para que el panel ocupe el 33% de la altura =====
         panel_half_base   = 0.45
-        panel_half_target = PANEL_HEIGHT_FRACTION
+        panel_half_target = PANEL_HEIGHT_FRACTION  # 0.33 => 33% de 2 = 0.66 total
 
         scale_z  = panel_half_target / panel_half_base
-        center_z = -1.0 + panel_half_target
+        center_z = -1.0 + panel_half_target  # centrado justo sobre el borde inferior
 
         self.crm_root.setScale(1.0, 1.0, scale_z)
         self.crm_root.setZ(center_z)
@@ -1138,13 +1114,37 @@ class TextVisemeDemo(ShowBase):
     def update_lead_panel(self, data: dict):
         """
         Actualiza los textos del panel CRM.
+
+        data esperado (en español):
+        {
+            "nombre":      "...",
+            "empresa":     "...",
+            "correo":      "...",
+            "telefono":    "...",
+            "diagnostico": "..."
+        }
+
+        También acepta algunos alias en inglés (compatibles con amain.py):
+        - "name"     -> nombre
+        - "company"  -> empresa
+        - "email"    -> correo
+        - "proposal" -> diagnostico
         """
         if not hasattr(self, "_crm_value_nodes"):
             return
 
         data = data or {}
+
+        normalizado = {
+            "nombre":      data.get("nombre")      or data.get("name"),
+            "empresa":     data.get("empresa")     or data.get("company"),
+            "correo":      data.get("correo")      or data.get("email"),
+            "telefono":    data.get("telefono"),
+            "diagnostico": data.get("diagnostico") or data.get("proposal"),
+        }
+
         for key, node_np in self._crm_value_nodes.items():
-            val = data.get(key, "-")
+            val = normalizado.get(key, "-")
             if val in (None, ""):
                 val = "-"
             tn = node_np.node()
@@ -1225,7 +1225,19 @@ def speak(text: str, clear_queue: bool = False):
 
 def update_crm(lead_data: dict):
     """
-    Actualiza el panel CRM.
+    Actualiza el panel CRM:
+
+        update_crm({
+            "nombre":      "Nombre del cliente",
+            "empresa":     "Empresa S.A.",
+            "correo":      "cliente@dominio.com",
+            "telefono":    "55-1234-5678",
+            "diagnostico": "Descripción corta del diagnóstico"
+        })
+
+    También puedes seguir mandando:
+        name, company, email, proposal
+    y se normalizan a las claves en español.
     """
     if APP_INSTANCE is None:
         print("⚠ El visor aún no está inicializado. Llama primero a start_viewer().")
@@ -1240,11 +1252,38 @@ class NachoRequestHandler(BaseHTTPRequestHandler):
 
         parsed = urlparse(self.path)
         qs = parse_qs(parsed.query)
+        path = parsed.path or "/"
 
+        # --- NUEVO: modo CRM ------------------------------------
+        if path.startswith("/crm"):
+            if APP_INSTANCE is None:
+                self._send_response(503, "Nacho aún no está listo (APP_INSTANCE es None).")
+                return
+
+            # Tomamos parámetros en español, con fallback a los que manda amain.py
+            data = {
+                "nombre":      qs.get("nombre", [""])[0]      or qs.get("name", [""])[0],
+                "empresa":     qs.get("empresa", [""])[0]     or qs.get("company", [""])[0],
+                "correo":      qs.get("correo", [""])[0]      or qs.get("email", [""])[0],
+                "telefono":    qs.get("telefono", [""])[0],
+                "diagnostico": qs.get("diagnostico", [""])[0] or qs.get("proposal", [""])[0],
+            }
+
+            try:
+                APP_INSTANCE.update_lead_panel(data)
+                self._send_response(200, "OK, CRM actualizado")
+            except Exception as e:
+                msg = f"Error al actualizar CRM: {e}"
+                print(msg)
+                self._send_response(500, msg)
+            return
+        # -------------------------------------------------------
+
+        # Modo texto normal (lo que ya tenías)
         if "t" in qs and qs["t"]:
             text = qs["t"][0]
         else:
-            text = unquote(parsed.path.lstrip("/"))
+            text = unquote(path.lstrip("/"))
 
         text = (text or "").strip()
 
@@ -1253,24 +1292,22 @@ class NachoRequestHandler(BaseHTTPRequestHandler):
                 400,
                 "Debes enviar texto en la URL, ej: /Hola%20soy%20Nacho o ?t=Hola"
             )
-            return
-
-        if APP_INSTANCE is None:
+        elif APP_INSTANCE is None:
             self._send_response(503, "Nacho aún no está listo (APP_INSTANCE es None).")
-            return
-
-        APP_INSTANCE.enqueue_text(text)
-        self._send_response(200, f"OK, Nacho dirá: {text}")
+        else:
+            APP_INSTANCE.enqueue_text(text)
+            self._send_response(200, f"OK, Nacho dirá: {text}")
 
     def log_message(self, format, *args):
+        # Silenciar logs de HTTPServer en consola
         return
 
-    def _send_response(self, code, msg):
-        self.send_response(code)
-        self.send_header("Content-Type", "text/plain; charset=utf-8")
-        self.end_headers()
+    def _send_response(self, code, msg: str):
         try:
-            self.wfile.write(msg.encode("utf-8"))
+            self.send_response(code)
+            self.send_header("Content-Type", "text/plain; charset=utf-8")
+            self.end_headers()
+            self.wfile.write(msg.encode("utf-8", errors="ignore"))
         except Exception:
             pass
 
@@ -1280,6 +1317,7 @@ def start_http_server(port: int = HTTP_PORT):
     print(f"🌐 Servidor HTTP de Nacho escuchando en http://localhost:{port}")
     print("   Ejemplo:  http://localhost:7000/Hola%20soy%20Nacho")
     print("   O:        http://localhost:7000/?t=Hola%20soy%20Nacho")
+    print("   CRM:      http://localhost:7000/crm?nombre=Lulu&empresa=Ei3&correo=test%40mail.com")
     server.serve_forever()
 
 
