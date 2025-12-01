@@ -1,256 +1,348 @@
 # -*- coding: utf-8 -*-
-# facial_fullface_speed_control.py — Animación facial con control de velocidad
-# Uso:
-#   pip install panda3d panda3d-gltf
-#   python facial_fullface_speed_control.py --glb tu_modelo.glb
+"""
+test.py — Servidor de prueba para el HUD del Totem (HTML).
 
-from direct.showbase.ShowBase import ShowBase
-from direct.actor.Actor import Actor
-from panda3d.core import ClockObject, AmbientLight, DirectionalLight, VBase4
-from direct.task import Task
-import math, random, sys, argparse
+Requisitos:
+    pip install fastapi uvicorn pydantic
 
-globalClock = ClockObject.getGlobalClock()
+Uso:
+    python test.py
 
-def clamp(x, lo, hi):
-    return max(lo, min(hi, x))
+Endpoints:
+    GET  /            -> HTML del panel HUD
+    GET  /dashboard   -> Estado actual (JSON)
+    POST /dashboard   -> Actualiza campos (JSON)
+"""
 
-class FacialSpeedDemo(ShowBase):
-    def __init__(self, glb_path):
-        ShowBase.__init__(self)
-        self.setBackgroundColor(0.15, 0.15, 0.15)
-        self.disableMouse()
-        self.camera.setPos(0, -5, 2)
-        self.camera.lookAt(0, 0, 1.5)
+from fastapi import FastAPI
+from fastapi.responses import HTMLResponse, JSONResponse
+from pydantic import BaseModel
+from typing import Optional, Dict, Any
+import uvicorn
 
-        # --- Luces ---
-        amb = AmbientLight("amb"); amb.setColor(VBase4(0.6,0.6,0.6,1))
-        dli = DirectionalLight("dir"); dli.setColor(VBase4(0.95,0.95,0.95,1))
-        self.render.setLight(self.render.attachNewNode(amb))
-        dnp = self.render.attachNewNode(dli); dnp.setHpr(25,-45,0)
-        self.render.setLight(dnp)
+app = FastAPI()
 
-        # --- Modelo ---
-        try:
-            self.actor = Actor(glb_path)
-        except Exception as e:
-            print(f"Error al cargar modelo: {e}\n(Instala: pip install panda3d-gltf)")
-            sys.exit(1)
-        self.actor.reparentTo(self.render)
+HUD_HTML = """<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <title>Totem – Captura de Datos</title>
+  <style>
+    /* FONDO GENERAL (difuminado entre colores Ei3) */
+    html, body {
+      margin: 0;
+      padding: 0;
+      width: 100%;
+      height: 100%;
+      font-family: "Consolas", "Courier New", monospace;
+      background: radial-gradient(circle at top left, #015666, #009999 70%, #01242b 100%);
+      color: #dfffff;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      overflow: hidden;
+    }
 
-        # --- Grupos de huesos ---
-        self.upper_L = self._find(["lip.T.L","lip.T.L.001"])
-        self.upper_R = self._find(["lip.T.R","lip.T.R.001"])
-        self.lower_L = self._find(["lip.B.L","lip.B.L.001"])
-        self.lower_R = self._find(["lip.B.R","lip.B.R.001"])
-        self.eyebrow_L = self._find([
-            "brow.B.L","brow.B.L.001","brow.B.L.002","brow.B.L.003",
-            "brow.T.L","brow.T.L.001","brow.T.L.002","brow.T.L.003"
-        ])
-        self.eyebrow_R = self._find([
-            "brow.B.R","brow.B.R.001","brow.B.R.002","brow.B.R.003",
-            "brow.T.R","brow.T.R.001","brow.T.R.002","brow.T.R.003"
-        ])
-        self.lid_L = self._find(["lid.T.L","lid.T.L.001","lid.T.L.002","lid.T.L.003",
-                                 "lid.B.L","lid.B.L.001","lid.B.L.002","lid.B.L.003"])
-        self.lid_R = self._find(["lid.T.R","lid.T.R.001","lid.T.R.002","lid.T.R.003",
-                                 "lid.B.R","lid.B.R.001","lid.B.R.002","lid.B.R.003"])
-        self.eye_L = self._find(["eye.L"])
-        self.eye_R = self._find(["eye.R"])
-        self.cheeks = self._find([
-            "cheek.T.L","cheek.T.L.001","cheek.T.R","cheek.T.R.001",
-            "cheek.B.L","cheek.B.L.001","cheek.B.R","cheek.B.R.001"
-        ])
-        self.forehead = self._find(["forehead.L","forehead.L.001","forehead.L.002",
-                                    "forehead.R","forehead.R.001","forehead.R.002"])
-        self.nose = self._find(["nose","nose.001","nose.002","nose.003","nose.004",
-                                "nose.L","nose.L.001","nose.R","nose.R.001"])
-        self.jaw = self._find(["jaw","jaw.L","jaw.L.001","jaw.R","jaw.R.001"])
-        self.chin = self._find(["chin","chin.001","chin.L"])
-        self.teeth = self._find(["teeth.T","teeth.B"])
-        self.tongue = self._find(["tongue","tongue.001","tongue.002"])
+    .hud-screen {
+      width: 100%;
+      max-width: 700px;
+      aspect-ratio: 3 / 4; /* similar proporción a la imagen */
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+      box-sizing: border-box;
+    }
 
-        # Guardar HPR base y fase aleatoria
-        self.base_hpr = {}
-        self.phase = {}
-        for group in [self.upper_L,self.upper_R,self.lower_L,self.lower_R,
-                      self.eyebrow_L,self.eyebrow_R,self.lid_L,self.lid_R,
-                      self.eye_L,self.eye_R,self.cheeks,self.forehead,
-                      self.nose,self.jaw,self.chin,self.teeth,self.tongue]:
-            for name,j in group:
-                self.base_hpr[name] = j.getHpr()
-                self.phase[name] = random.random()*math.tau
+    /* MARCO PRINCIPAL */
+    .hud-panel {
+      position: relative;
+      width: 100%;
+      height: 100%;
+      border-radius: 24px;
+      border: 1px solid #31f0e3; /* cian brillante */
+      box-shadow: 0 0 45px rgba(0, 0, 0, 0.75);
+      box-sizing: border-box;
+      padding: 26px 30px 22px;
+      display: flex;
+      flex-direction: column;
+      justify-content: flex-start;
+      background: rgba(0, 20, 24, 0.35);
+    }
 
-        # --- Parámetros ---
-        self.mode = "speech"
-        self.t = 0.0
-        self.top_ratio = 0.35
-        self.bot_ratio = 0.90
-        self.pitch_idle = 0.6
-        self.pitch_talk = 6.0
-        self.roll_talk = 6.0
-        self.roll_idle = 0.6
+    /* ESQUINAS NARANJA */
+    .corner {
+      position: absolute;
+      width: 20px;
+      height: 3px;
+      background: #ff7c00;
+    }
+    .corner.tl { top: 14px; left: 22px; transform: rotate(25deg); }
+    .corner.tr { top: 14px; right: 22px; transform: rotate(-25deg); }
+    .corner.bl { bottom: 14px; left: 22px; transform: rotate(-25deg); }
+    .corner.br { bottom: 14px; right: 22px; transform: rotate(25deg); }
 
-        # --- Control de velocidad ---
-        self.speed_factor = 1.0
-        self.accept("+", self.increase_speed)
-        self.accept("-", self.decrease_speed)
+    /* TÍTULO */
+    .hud-title {
+      text-align: center;
+      font-size: 24px;
+      letter-spacing: 0.22em;
+      text-transform: uppercase;
+      color: #42f5e8;
+      margin-bottom: 26px;
+    }
+    .hud-title span {
+      display: block;
+    }
 
-        # Cámara interactiva
-        self.accept("wheel_up", self._zoom_in)
-        self.accept("wheel_down", self._zoom_out)
-        self.accept("mouse1", self._start_rotate)
-        self.accept("mouse1-up", self._stop_rotate)
-        self.is_rotating = False
-        self.last_mouse = (0,0)
-        self.cam_dist = 5
-        self.cam_angle_x = 15
-        self.cam_angle_y = 0
-        self.taskMgr.add(self._update_camera, "camera_task")
+    /* CAJA INTERNA DE DATOS (como en la imagen) */
+    .hud-inner {
+      border: 1px solid rgba(49, 240, 227, 0.8);
+      border-radius: 8px;
+      padding: 20px 24px 18px;
+      box-sizing: border-box;
+      margin-bottom: 26px;
+    }
 
-        # Animación
-        self.taskMgr.add(self.animate, "animate")
+    .hud-row {
+      display: flex;
+      align-items: baseline;
+      gap: 10px;
+      font-size: 18px;
+      color: #7cfef3;
+      margin-bottom: 14px;
+    }
 
-    # ---------- Helpers ----------
-    def _find(self, names):
-        out = []
-        for n in names:
-            try:
-                j = self.actor.controlJoint(None, "modelRoot", n)
-                if not j.isEmpty():
-                    out.append((n,j))
-            except: pass
-        return out
+    .hud-label {
+      min-width: 155px;
+      letter-spacing: 0.20em;
+    }
 
-    def increase_speed(self):
-        self.speed_factor = min(5.0, self.speed_factor + 0.1)
-        print(f"Velocidad: {self.speed_factor:.2f}")
+    .hud-value {
+      flex: 1;
+      color: #e9ffff;
+      padding-bottom: 4px;
+      border-bottom: 1px solid rgba(49, 240, 227, 0.65);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
 
-    def decrease_speed(self):
-        self.speed_factor = max(0.1, self.speed_factor - 0.1)
-        print(f"Velocidad: {self.speed_factor:.2f}")
+    .hud-value.empty {
+      color: rgba(124, 254, 243, 0.55);
+      border-bottom-color: rgba(30, 110, 110, 0.8);
+    }
 
-    def _zoom_in(self): self.cam_dist = max(2,self.cam_dist-0.5)
-    def _zoom_out(self): self.cam_dist = min(10,self.cam_dist+0.5)
-    def _start_rotate(self):
-        if self.mouseWatcherNode.hasMouse():
-            self.is_rotating = True
-            m = self.mouseWatcherNode.getMouse()
-            self.last_mouse = (m.getX(), m.getY())
-    def _stop_rotate(self): self.is_rotating = False
-    def _update_camera(self, task):
-        if self.is_rotating and self.mouseWatcherNode.hasMouse():
-            m = self.mouseWatcherNode.getMouse()
-            dx = m.getX()-self.last_mouse[0]
-            dy = m.getY()-self.last_mouse[1]
-            self.cam_angle_y += dx*100
-            self.cam_angle_x = clamp(self.cam_angle_x - dy*100, -20, 60)
-            self.last_mouse = (m.getX(), m.getY())
-        x = self.cam_dist*math.sin(math.radians(self.cam_angle_y))
-        y = -self.cam_dist*math.cos(math.radians(self.cam_angle_y))
-        z = self.cam_dist*math.sin(math.radians(self.cam_angle_x))*0.2 + 1.8
-        self.camera.setPos(x,y,z)
-        self.camera.lookAt(0,0,1.5)
-        return Task.cont
+    /* STATUS + BARRA */
+    .hud-status {
+      font-size: 16px;
+      letter-spacing: 0.22em;
+      text-transform: uppercase;
+      color: #42f5e8;
+      margin-bottom: 10px;
+    }
 
-    # ---------- Animación ----------
-    def _env_raw(self, t):
-        v = 0.45 + 0.30*math.sin(11.0*t) + 0.20*math.sin(17.0*t+1.0) + 0.10*math.sin(23.0*t+0.3)
-        v += 0.05*random.uniform(-1.0,1.0)
-        return clamp(v,0.0,1.0)
+    .hud-progress-bar {
+      width: 70%;
+      height: 8px;
+      border-radius: 999px;
+      background: rgba(0, 0, 0, 0.55);
+      overflow: hidden;
+      box-shadow: inset 0 0 4px rgba(0, 0, 0, 0.9);
+    }
 
-    def _shape_env(self, x):
-        if x <= 0.2: y=0.0
-        else:
-            y = (x-0.2)/(1-0.2)
-            y = pow(y,0.85)
-        return clamp(y*1.05,0.0,1.0)
+    .hud-progress-fill {
+      width: 50%;
+      height: 100%;
+      background: linear-gradient(90deg, #ff7c00, #ffba66);
+      transition: width 0.3s ease-out;
+    }
+  </style>
+</head>
+<body>
+  <div class="hud-screen">
+    <div class="hud-panel">
+      <div class="corner tl"></div>
+      <div class="corner tr"></div>
+      <div class="corner bl"></div>
+      <div class="corner br"></div>
 
-    def animate(self, task):
-        dt = globalClock.getDt() * self.speed_factor
-        self.t += dt
+      <div class="hud-title">
+        <span>CAPTURA DE DATOS</span>
+        <span>EVOLUCIÓN I3</span>
+      </div>
 
-        env = self._shape_env(self._env_raw(self.t))
+      <div class="hud-inner">
+        <div class="hud-row">
+          <div class="hud-label">NOMBRE:</div>
+          <div class="hud-value empty" id="v-nombre">-----</div>
+        </div>
+        <div class="hud-row">
+          <div class="hud-label">EMPRESA:</div>
+          <div class="hud-value empty" id="v-empresa">-----</div>
+        </div>
+        <div class="hud-row">
+          <div class="hud-label">EMAIL:</div>
+          <div class="hud-value empty" id="v-email">-----</div>
+        </div>
+        <div class="hud-row">
+          <div class="hud-label">TELÉFONO:</div>
+          <div class="hud-value empty" id="v-telefono">-----</div>
+        </div>
+        <div class="hud-row" style="margin-bottom: 0;">
+          <div class="hud-label">SOLUCIÓN:</div>
+          <div class="hud-value empty" id="v-solucion">---</div>
+        </div>
+      </div>
 
-        # --- Labios ---
-        if self.mode=="idle":
-            top_pitch = self.pitch_idle*math.sin(self.t*1.5)
-            bot_pitch = self.pitch_idle*math.sin(self.t*1.5+0.3)
-            roll_amt  = self.roll_idle*math.sin(self.t*1.2)
-        else:
-            top_pitch = self.pitch_talk*self.top_ratio*math.sin(self.t*8.0)*env
-            bot_pitch = self.pitch_talk*self.bot_ratio*math.sin(self.t*8.0+0.2)*env
-            roll_amt  = self.roll_talk*env*math.sin(self.t*7.5)
-        self._apply_lips(top_pitch,bot_pitch,roll_amt)
+      <div>
+        <div class="hud-status" id="hud-status">
+          STATUS: CAPTURANDO DATOS…
+        </div>
+        <div class="hud-progress-bar">
+          <div class="hud-progress-fill" id="progress-fill"></div>
+        </div>
+      </div>
+    </div>
+  </div>
 
-        # --- Cejas ---
-        brow_pitch = 1.5*math.sin(self.t*1.8)+0.8*env
-        for group in [self.eyebrow_L,self.eyebrow_R]:
-            for name,j in group:
-                h,p,r = self.base_hpr[name]
-                j.setHpr(h,p+brow_pitch,r)
+  <script>
+    const mapIds = {
+      nombre:   "v-nombre",
+      empresa:  "v-empresa",
+      email:    "v-email",
+      telefono: "v-telefono",
+      solucion: "v-solucion",
+    };
 
-        # --- Mejillas ---
-        cheek_pitch = 0.3*top_pitch + 0.2*bot_pitch
-        for name,j in self.cheeks:
-            h,p,r = self.base_hpr[name]
-            j.setHpr(h,p+cheek_pitch,r)
+    const progressFill = document.getElementById("progress-fill");
+    const statusEl = document.getElementById("hud-status");
 
-        # --- Frente ---
-        for name,j in self.forehead:
-            h,p,r = self.base_hpr[name]
-            j.setHpr(h,p+0.3*env,r)
+    function applyField(id, value, filled) {
+      const el = document.getElementById(mapIds[id]);
+      if (!el) return;
 
-        # --- Nariz ---
-        for name,j in self.nose:
-            h,p,r = self.base_hpr[name]
-            j.setHpr(h,p+0.2*env,r)
+      if (filled && value && value.trim() !== "") {
+        el.textContent = value;
+        el.classList.remove("empty");
+      } else {
+        el.textContent = (id === "solucion") ? "---" : "-----";
+        el.classList.add("empty");
+      }
+    }
 
-        # --- Mandíbula y barbilla ---
-        jaw_pitch = bot_pitch*0.5
-        for name,j in self.jaw+self.chin:
-            h,p,r = self.base_hpr[name]
-            j.setHpr(h,p+jaw_pitch,r)
+    function updateFromDashboard(data) {
+      const fields = data.fields || [];
+      const total = fields.length || 0;
+      const filledCount = data.filled_count || 0;
 
-        # --- Lengua y dientes ---
-        for name,j in self.tongue+self.teeth:
-            h,p,r = self.base_hpr[name]
-            j.setHpr(h,p+0.1*env,r)
+      fields.forEach(f => {
+        if (mapIds[f.id]) {
+          applyField(f.id, f.value || "", f.filled);
+        }
+      });
 
-        # --- Parpadeo (ojos a velocidad constante, mitad de dt) ---
-        # blink_val = max(0, math.sin(self.t*0.5*random.uniform(1.5,3.0))*1.0)
-        # for group in [self.lid_L,self.lid_R]:
-        #     for name,j in group:
-        #         h,p,r = self.base_hpr[name]
-        #         j.setHpr(h,p-blink_val*15,r)
+      const pct = total > 0 ? (filledCount / total) * 100 : 0;
+      progressFill.style.width = pct + "%";
 
-        # --- Ojos (movimiento muy sutil, mitad de velocidad) ---
-        eye_val = 0.05*math.sin(self.t*0.01)
-        for name,j in self.eye_L+self.eye_R:
-            h,p,r = self.base_hpr[name]
-            j.setHpr(h,p+eye_val,r)
+      if (filledCount === total && total > 0) {
+        statusEl.textContent = "STATUS: DATOS COMPLETOS";
+      } else {
+        statusEl.textContent = "STATUS: CAPTURANDO DATOS…";
+      }
+    }
 
-        return Task.cont
+    async function fetchDashboard() {
+      try {
+        const res = await fetch("/dashboard");
+        if (!res.ok) return;
+        const data = await res.json();
+        updateFromDashboard(data);
+      } catch (err) {
+        console.error("Error obteniendo dashboard", err);
+      }
+    }
 
-    def _apply_lips(self, top_pitch, bot_pitch, roll_amt):
-        TOP_SIGN = -1.0
-        BOT_SIGN = +1.0
-        for name,j in self.upper_L+self.upper_R:
-            h,p,r = self.base_hpr[name]
-            phase = self.phase[name]
-            jitter = 0.15*math.sin(self.t*10.0+phase)
-            j.setHpr(h,p+TOP_SIGN*(top_pitch+jitter),r)
-        for name,j in self.lower_L+self.lower_R:
-            h,p,r = self.base_hpr[name]
-            phase = self.phase[name]
-            jitter = 0.15*math.sin(self.t*10.0+phase+0.5)
-            j.setHpr(h,p+BOT_SIGN*(bot_pitch+jitter),r)
-        for name,j in self.upper_L+self.lower_L: h,p,r=j.getHpr(); j.setHpr(h,p,r+roll_amt)
-        for name,j in self.upper_R+self.lower_R: h,p,r=j.getHpr(); j.setHpr(h,p,r-roll_amt)
+    // Primer fetch y luego refresco cada 1 segundo
+    fetchDashboard();
+    setInterval(fetchDashboard, 1000);
+  </script>
+</body>
+</html>"""
 
-if __name__=="__main__":
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--glb", required=True, help="ruta al modelo .glb")
-    args = ap.parse_args()
-    app = FacialSpeedDemo(args.glb)
-    app.run()
+# ------------------ ESTADO EN MEMORIA ------------------
+
+
+class DashboardUpdate(BaseModel):
+    nombre: Optional[str] = None
+    empresa: Optional[str] = None
+    email: Optional[str] = None
+    telefono: Optional[str] = None
+    solucion: Optional[str] = None
+
+
+# valores actuales (simulan lo que luego vendrá de los slots del Totem)
+CURRENT_VALUES: Dict[str, Optional[str]] = {
+    "nombre": None,
+    "empresa": None,
+    "email": None,
+    "telefono": None,
+    "solucion": None,
+}
+
+
+def build_dashboard_state() -> Dict[str, Any]:
+    fields = []
+    filled = 0
+    for field_id in ["nombre", "empresa", "email", "telefono", "solucion"]:
+        value = CURRENT_VALUES.get(field_id)
+        is_filled = bool(value and value.strip())
+        if is_filled:
+            filled += 1
+
+        label = "SOLUCIÓN" if field_id == "solucion" else field_id.upper()
+        fields.append(
+            {
+                "id": field_id,
+                "label": label,
+                "value": value if is_filled else None,
+                "filled": is_filled,
+            }
+        )
+
+    missing = [f["id"] for f in fields if not f["filled"]]
+
+    return {
+        "session_id": "demo",
+        "fields": fields,
+        "filled_count": filled,
+        "missing_count": len(missing),
+        "missing": missing,
+    }
+
+
+# ------------------ ENDPOINTS ------------------
+
+
+@app.get("/", response_class=HTMLResponse)
+async def root():
+    return HTMLResponse(content=HUD_HTML)
+
+
+@app.get("/dashboard", response_class=JSONResponse)
+async def get_dashboard():
+    return JSONResponse(content=build_dashboard_state())
+
+
+@app.post("/dashboard", response_class=JSONResponse)
+async def update_dashboard(payload: DashboardUpdate):
+    data = payload.dict()
+    for key, value in data.items():
+        if key in CURRENT_VALUES and value is not None:
+            txt = value.strip()
+            CURRENT_VALUES[key] = txt or None
+    return JSONResponse(content=build_dashboard_state())
+
+
+if __name__ == "__main__":
+    uvicorn.run(app, host="127.0.0.1", port=8000, reload=False)

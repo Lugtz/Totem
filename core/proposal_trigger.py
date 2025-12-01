@@ -1,220 +1,289 @@
 # -*- coding: utf-8 -*-
 """
-core/proposal_trigger.py
+core.proposal_trigger
 
-Módulo para disparar la generación de propuestas desde el Totem Evolución IA3.
+Módulo del Totem para disparar la generación de propuesta en Catalystic.
 
-- Recibe un diccionario de campos (slots) desde el diálogo.
-- Normaliza nombres de campos.
-- Envía los datos a Zoho Flow (FLOW_URL) en el formato:
-    { "payload": { ... } }
-- Si FLOW_URL NO está definido, guarda el payload en core/outputs/proposal_*.json
-  para poder revisar qué se habría enviado.
+- Toma los slots acumulados de la conversación con Nacho.
+- Construye el JSON que espera tu endpoint /open-proposal-fields.
+- Hace POST a Catalyst (CATA_PROPOSAL_URL) y registra el resultado en logs.
+
+No devuelve nada al Totem; la propuesta se arma en el backend (Catalyst/Writer/WorkDrive).
 """
 
 from __future__ import annotations
 
 import os
-import json
 import asyncio
-import datetime
-from typing import Dict, Any, Optional
+import json
 from pathlib import Path
+from typing import Any, Dict, List
 
 import requests
+from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel
 from dotenv import load_dotenv
 
+from core.logger import get_logger
 
-# ----------------------------------------------------------------------
-# 1. ENTORNO Y RUTAS
-# ----------------------------------------------------------------------
-ROOT_DIR = Path(__file__).parent.parent.resolve()
+logger = get_logger(__name__)
+
+
+# ---------------------------------------------------------
+# Cargar .env y URL de Catalyst
+# ---------------------------------------------------------
+ROOT_DIR = Path(__file__).resolve().parent.parent
 ENV_PATH = ROOT_DIR / ".env"
-
 if ENV_PATH.exists():
     load_dotenv(ENV_PATH)
 else:
     load_dotenv()
 
-# Carpeta de salidas locales (propuestas de respaldo)
-CORE_DIR = Path(__file__).parent  # .../Totem/core
-OUTPUT_DIR = CORE_DIR / "outputs"
-OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-
-FLOW_URL: Optional[str] = os.getenv("FLOW_URL", "").strip() or None
-WRITER_DOC_ID: Optional[str] = os.getenv("WRITER_DOC_ID", "").strip() or None
-
-
-# ----------------------------------------------------------------------
-# 2. MAPEO DE CAMPOS
-# ----------------------------------------------------------------------
-def _map_campos(campos: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    Normaliza los campos que vienen del Totem y los deja listos
-    para Zoho Flow / Writer.
-
-    Importante:
-    - 'objetivo' y 'solucion' se llenan con el mismo valor
-      (lo que el Totem capturó como solución/objetivo).
-    - Acepta tanto 'semana_piloto' como 'semanas_piloto' y variantes.
-    - No obliga a tener IVA ni precios por usuario; si no vienen, se omiten.
-    """
-
-    # Texto de objetivo / solución (puede venir como 'solucion' o 'objetivo')
-    objetivo_o_solucion = (
-        campos.get("solucion")
-        or campos.get("objetivo")
+# ⚠️ En tu .env pon algo como:
+# CATA_PROPOSAL_URL=https://TU-FUNCION-CATALYST/open-proposal-fields
+CATALYST_PROPOSAL_URL = os.getenv("CATA_PROPOSAL_URL", "").strip()
+if not CATALYST_PROPOSAL_URL:
+    logger.warning(
+        "core.proposal_trigger: CATA_PROPOSAL_URL no definida en .env; "
+        "no se podrán disparar propuestas."
     )
 
-    out: Dict[str, Any] = {
-        # Datos base
-        "nombre": campos.get("nombre"),
-        "empresa": campos.get("empresa"),
-        "email": campos.get("email"),
 
-        # Objetivo / solución del proyecto
-        "objetivo": objetivo_o_solucion,
-        "solucion": objetivo_o_solucion,
+# ---------------------------------------------------------
+# Utilidad: inferir módulos en base a los slots detalle_*
+# ---------------------------------------------------------
 
-        # Datos de proyecto
-        "duracion": campos.get("duracion"),
-        "precio": campos.get("precio"),
-        "moneda": campos.get("moneda"),
+def _inferir_modulos_desde_slots(slots: Dict[str, Any]) -> List[str]:
+    """
+    A partir de los slots detalle_* decidimos qué módulos enviar a Catalyst.
 
-        # Semana / mes de piloto (acepta varias variantes)
-        "semanas_piloto": (
-            campos.get("semana_piloto")
-            or campos.get("semanas_piloto")
-            or campos.get("Semanas piloto")
-        ),
+    BIBLIOTECA_OFICIAL en Catalyst maneja:
+    - zoho_crm
+    - zoho_desk
+    - zoho_books
+    - zoho_inventory
+    - zoho_sign
+    """
+    mods: List[str] = []
 
-        # IVA (opcional)
-        "iva": campos.get("iva") or campos.get("IVA"),
+    # CRM
+    if slots.get("detalle_zoho_crm"):
+        mods.append("zoho_crm")
 
-        # Porcentajes (opcional)
-        "pago_inicio": (
-            campos.get("porcentaje_inicio")
-            or campos.get("pago_inicio")
-            or campos.get("Porcentaje de inicio")
-        ),
-        "pago_cierre": (
-            campos.get("porcentaje_cierre")
-            or campos.get("pago_cierre")
-            or campos.get("Porcentaje al cierre")
-        ),
+    # Desk (soporte)
+    if slots.get("detalle_desk"):
+        mods.append("zoho_desk")
 
-        # Licencia / versión (opcional)
-        "licencia": campos.get("licencia") or campos.get("Licencia a utilizar"),
-        "version": campos.get("version") or campos.get("Versión"),
+    # Books
+    if slots.get("detalle_zoho_books") or slots.get("detalle_books"):
+        mods.append("zoho_books")
 
-        # Precios por usuario (opcionales)
-        "precio_mensual_usuario": (
-            campos.get("precio_mensual_usuario")
-            or campos.get("Precio mensual por Usuario")
-        ),
-        "precio_anual_usuario": (
-            campos.get("precio_anual_usuario")
-            or campos.get("Precio Anual por usuario")
-        ),
-        "moneda_licencias": (
-            campos.get("moneda_licencias")
-            or campos.get("Moneda de las Licencias")
-        ),
+    # Inventory
+    if slots.get("detalle_zoho_inventory") or slots.get("detalle_inventory"):
+        mods.append("zoho_inventory")
+
+    # Sign
+    if slots.get("detalle_zoho_sign") or slots.get("detalle_sign"):
+        mods.append("zoho_sign")
+
+    # Si no detectamos nada, por defecto proponemos Zoho CRM
+    if not mods:
+        mods.append("zoho_crm")
+
+    return mods
+
+
+# ---------------------------------------------------------
+# Construir el payload que se envía a Catalyst
+# ---------------------------------------------------------
+
+def _build_payload_from_slots(slots: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Mapea los slots del Totem al JSON que espera tu función Catalyst
+    (/open-proposal-fields).
+
+    Campos esperados por Catalyst en main.py:
+      Name, Company, Objetivo, Duracion, 'Semanas piloto', Precio,
+      Modulos, Integracion_SAP, Integracion_Oracle, Requiere_SAT,
+      Factura_electronica, CFDI, Complementos, Usara_Zoho_Books, etc.
+
+    Además mandamos:
+      Correo, Telefono, Detalle_Zoho_CRM, Detalle_SalesIQ, Detalle_Desk, Diagnostico,
+      y una copia del dict de slots como SlotsOriginales.
+    """
+    nombre = str(slots.get("nombre") or "").strip()
+    empresa = str(slots.get("empresa") or "").strip()
+    correo = str(slots.get("correo") or "").strip()
+    telefono = str(slots.get("telefono") or "").strip()
+
+    # Objetivo / solución principal:
+    solucion = str(slots.get("solucion_a_implementar") or "").strip()
+    diagnostico = str(slots.get("diagnostico") or "").strip()
+
+    # Detalles por módulo
+    detalle_zoho_crm = str(slots.get("detalle_zoho_crm") or "").strip()
+    detalle_salesiq = str(slots.get("detalle_salesiq") or "").strip()
+    detalle_desk = str(slots.get("detalle_desk") or "").strip()
+
+    # Objetivo final que verá la IA de Catalyst
+    objetivo = solucion or diagnostico or detalle_zoho_crm
+
+    # Por ahora no estamos capturando duración ni precio desde el Totem;
+    # lo dejamos que lo calcule tu lógica de IA o lo ajustamos después.
+    duracion = ""            # deja a la IA decidir (según tu main.py)
+    semanas_piloto = "1"
+    precio = str(slots.get("precio") or "0").strip()  # si algún día lo capturas en el diálogo
+
+    modulos = _inferir_modulos_desde_slots(slots)
+
+    payload: Dict[str, Any] = {
+        # Campos principales esperados por main.py
+        "Name": nombre,
+        "Company": empresa,
+        "Objetivo": objetivo,
+        # Compatibilidad con: data.get("Objetivo") or data.get("Solucion a implementar")
+        "Solucion a implementar": solucion,
+        "Duracion": duracion,
+        "Semanas piloto": semanas_piloto,
+        "Precio": precio,
+        "Modulos": modulos,
+
+        # 📨 Datos de contacto
+        "Correo": correo,
+        "Telefono": telefono,
+
+        # 🔍 Detalles de diagnóstico por módulo
+        "Diagnostico": diagnostico,
+        "Detalle_Zoho_CRM": detalle_zoho_crm,
+        "Detalle_SalesIQ": detalle_salesiq,
+        "Detalle_Desk": detalle_desk,
+
+        # Flags opcionales (de momento todos en False / vacío, se pueden usar después)
+        "Integracion_SAP": False,
+        "Integracion_Oracle": False,
+        "Requiere_SAT": False,
+        "Factura_electronica": False,
+        "CFDI": False,
+        "Complementos": "",
+        "Usara_Zoho_Books": False,
+
+        # Copia completa de los slots por si quieres usarlos en Catalyst
+        "SlotsOriginales": slots,
     }
 
-    # ID del Writer Doc, si está configurado
-    if WRITER_DOC_ID:
-        out["writer_doc_id"] = WRITER_DOC_ID
-
-    # Limpia claves vacías (None o "")
-    return {k: v for k, v in out.items() if v not in (None, "")}
+    return payload
 
 
-# ----------------------------------------------------------------------
-# 3. FUNCIÓN PRINCIPAL: generar_propuesta_pdf
-# ----------------------------------------------------------------------
-async def generar_propuesta_pdf(campos: Dict[str, Any]) -> Any:
+# ---------------------------------------------------------
+# Función principal llamada desde amain.py
+# ---------------------------------------------------------
+
+async def generar_propuesta_pdf(slots: Dict[str, Any]) -> None:
     """
-    Recibe los campos crudos del Totem (slots) y:
+    Llamada desde amain.py cuando el Totem ya tiene
+    los mínimos (por ahora: nombre y empresa).
 
-    1. Los normaliza con _map_campos().
-    2. Si FLOW_URL está configurado → POST a Zoho Flow:
-          { "payload": { ...campos_normalizados... } }
-    3. Si NO hay FLOW_URL → guarda el JSON en core/outputs/proposal_*.json
-
-    Devuelve:
-    - El resultado de Flow (dict) si la llamada fue exitosa, o
-    - La ruta del archivo JSON local de respaldo, o
-    - None si algo sale muy mal (ya se imprime el error).
+    - Construye el payload a partir de los slots.
+    - Hace POST a CATALYST_PROPOSAL_URL (/open-proposal-fields).
+    - No devuelve nada; solo registra logs para depurar.
     """
-    campos_normalizados = _map_campos(campos)
-    payload = {"payload": campos_normalizados}
+    if not CATALYST_PROPOSAL_URL:
+        logger.warning(
+            "generar_propuesta_pdf: CATA_PROPOSAL_URL no está configurada; "
+            "NO se envía nada a Catalyst."
+        )
+        return
 
-    # Log rápido para depuración
-    print("▶ generar_propuesta_pdf() — campos_normalizados:")
-    print(json.dumps(campos_normalizados, ensure_ascii=False, indent=2))
+    payload = _build_payload_from_slots(slots)
 
-    # ------------------------------------------------------------------
-    # CASO 1: Hay FLOW_URL → enviar a Zoho Flow
-    # ------------------------------------------------------------------
-    if FLOW_URL:
-        def _post() -> Any:
-            r = requests.post(FLOW_URL, json=payload, timeout=30)
-            r.raise_for_status()
+    def _do_post() -> requests.Response:
+        logger.info(
+            "[proposal_trigger] Enviando a Catalyst (%s) payload=%s",
+            CATALYST_PROPOSAL_URL,
+            json.dumps(payload, ensure_ascii=False),
+        )
+        return requests.post(
+            CATALYST_PROPOSAL_URL,
+            json=payload,
+            timeout=60,
+        )
 
-            ct = (r.headers.get("Content-Type") or "").lower()
-            if "application/json" in ct:
-                try:
-                    return r.json()
-                except Exception:
-                    return {"status": r.status_code, "raw": r.text[:500]}
-
-            return {"status": r.status_code, "text": r.text[:500]}
-
-        try:
-            result = await asyncio.to_thread(_post)
-            print("✅ Zoho Flow OK:", result)
-            # Guardamos copia de lo que mandamos para depurar si hace falta
-            ts = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
-            backup_path = OUTPUT_DIR / f"proposal_{ts}.json"
-            with backup_path.open("w", encoding="utf-8") as f:
-                json.dump(
-                    {"flow_url": FLOW_URL, "payload": payload, "result": result},
-                    f,
-                    ensure_ascii=False,
-                    indent=2,
-                )
-            print(f"💾 Respaldo de propuesta guardado en: {backup_path}")
-            return result
-        except Exception as e:
-            print(f"❌ Error en generar_propuesta_pdf (FLOW_URL): {e}")
-            # También dejamos respaldo local del error y del payload
-            ts = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
-            error_path = OUTPUT_DIR / f"proposal_error_{ts}.json"
-            with error_path.open("w", encoding="utf-8") as f:
-                json.dump(
-                    {
-                        "flow_url": FLOW_URL,
-                        "payload": payload,
-                        "error": repr(e),
-                    },
-                    f,
-                    ensure_ascii=False,
-                    indent=2,
-                )
-            print(f"⚠ Respaldo de error guardado en: {error_path}")
-            return None
-
-    # ------------------------------------------------------------------
-    # CASO 2: No hay FLOW_URL → solo guardar el JSON localmente
-    # ------------------------------------------------------------------
     try:
-        ts = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
-        out_json = OUTPUT_DIR / f"proposal_{ts}.json"
-        with out_json.open("w", encoding="utf-8") as f:
-            json.dump(payload, f, ensure_ascii=False, indent=2)
-        print(f"⚠ FLOW_URL no definido. Se guardó payload en: {out_json}")
-        return str(out_json)
+        resp: requests.Response = await asyncio.to_thread(_do_post)
     except Exception as e:
-        print(f"❌ Error guardando propuesta localmente: {e}")
-        return None
+        logger.exception("[proposal_trigger] Error al contactar Catalyst: %r", e)
+        return
+
+    texto = resp.text[:600]
+    logger.info(
+        "[proposal_trigger] Respuesta Catalyst HTTP %s body=%s",
+        resp.status_code,
+        texto,
+    )
+
+    if resp.status_code != 200:
+        logger.warning(
+            "[proposal_trigger] Catalyst devolvió código %s; revisar logs de la función.",
+            resp.status_code,
+        )
+        return
+
+    try:
+        data = resp.json()
+    except Exception:
+        logger.exception(
+            "[proposal_trigger] No se pudo parsear JSON de Catalyst; body=%s",
+            texto,
+        )
+        return
+
+    if not isinstance(data, dict):
+        logger.warning(
+            "[proposal_trigger] Respuesta inesperada de Catalyst (no es dict): %r",
+            type(data),
+        )
+        return
+
+    ok = data.get("ok")
+    if ok:
+        logger.info(
+            "[proposal_trigger] Catalyst generó campos de propuesta correctamente (ok=true)."
+        )
+    else:
+        logger.warning(
+            "[proposal_trigger] Catalyst respondió ok=%r, detalle=%r",
+            ok,
+            data,
+        )
+
+
+# ---------------------------------------------------------
+# Router opcional (para disparar vía HTTP si se requiere)
+# ---------------------------------------------------------
+
+router = APIRouter()
+
+
+class ProposalTriggerRequest(BaseModel):
+    slots: Dict[str, Any]
+
+
+@router.post("/trigger")
+async def trigger_proposal(req: ProposalTriggerRequest):
+    """
+    Endpoint opcional:
+
+    POST /proposal/trigger
+    {
+      "slots": { ... }
+    }
+
+    → Llama internamente a generar_propuesta_pdf(slots).
+    """
+    try:
+        await generar_propuesta_pdf(req.slots)
+    except Exception as e:
+        logger.exception("Error en /proposal/trigger: %r", e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+    return {"ok": True}
