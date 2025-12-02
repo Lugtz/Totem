@@ -9,16 +9,13 @@ from typing import Optional, Any, Dict, List
 
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
-import httpx # Cliente HTTP asíncrono
+import httpx  # Cliente HTTP asíncrono
 
 from core.logger import get_logger
 from core.dialog_engine import procesar_turno_dialogo, CAMPOS_REQUERIDOS
 from core.camera_agent import iniciar_detector  # Detector de personas (YOLO + cámara)
 import urllib.parse
 import os
-
-# ❌ Ya NO usamos TTS aquí para evitar duplicados.
-# from core.tts_engine import speak  # 🔊 TTS (se usa solo desde core.camera_agent)
 
 logger = get_logger(__name__)
 NACHO_BASE_URL = os.getenv("NACHO_BASE_URL", "http://localhost:7000").rstrip("/")
@@ -38,11 +35,24 @@ except Exception as e:
 
 try:
     from core.infographic_engine import generar_infografia_png  # type: ignore
-    logger.info("amain: generar_infografia_generada importado correctamente.")
+    logger.info("amain: generar_infografia_png importado correctamente.")
 except Exception as e:
     generar_infografia_png = None  # type: ignore
     logger.warning(
         "amain: NO se pudo importar generar_infografia_png desde core.infographic_engine: %r",
+        e,
+    )
+
+# ----------------------------------------------------------
+# Import opcional del cliente de CRM (Zoho)
+# ----------------------------------------------------------
+try:
+    from core.crm_client import crear_lead_en_crm  # type: ignore
+    logger.info("amain: crear_lead_en_crm importado correctamente.")
+except Exception as e:
+    crear_lead_en_crm = None  # type: ignore
+    logger.warning(
+        "amain: NO se pudo importar crear_lead_en_crm desde core.crm_client: %r",
         e,
     )
 
@@ -116,7 +126,7 @@ except Exception:
 # ----------------------------------------------------------
 # Estado simple de sesiones (en memoria)
 # ----------------------------------------------------------
-# Aquí guardamos si ya se envió propuesta / infografía para esa sesión
+# Aquí guardamos si ya se envió propuesta / infografía / lead CRM para esa sesión
 SESIONES: dict[str, Dict[str, Any]] = {}
 
 
@@ -125,15 +135,18 @@ def _get_sesion_meta(session_id: str) -> Dict[str, Any]:
     Devuelve/crea la metadata de la sesión.
     - proposal_enviada: bool
     - infografia_generada: bool
+    - lead_creado: bool
     """
     if session_id not in SESIONES:
         SESIONES[session_id] = {
             "proposal_enviada": False,
             "infografia_generada": False,
+            "lead_creado": False,
         }
     else:
         SESIONES[session_id].setdefault("proposal_enviada", False)
         SESIONES[session_id].setdefault("infografia_generada", False)
+        SESIONES[session_id].setdefault("lead_creado", False)
     return SESIONES[session_id]
 
 
@@ -147,17 +160,68 @@ def _tiene_minimos_para_propuesta(slots: Dict[str, Any]) -> bool:
     return bool(slots.get("nombre")) and bool(slots.get("empresa"))
 
 
+def _mapear_slots_para_crm(slots: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Mapea los slots del Totem a los nombres esperados por core.crm_client.crear_lead_en_crm.
+
+    Resultado esperado (igual que en tu script de prueba directa):
+    {
+        "Name": "...",
+        "Company": "...",
+        "Email": "...",
+        "Phone": "...",
+        "OBJETIVO": "..."
+    }
+    """
+    return {
+        "Name": (
+            slots.get("nombre")
+            or slots.get("Name")
+            or "Visitante Totem"
+        ),
+        "Company": (
+            slots.get("empresa")
+            or slots.get("Company")
+            or "Visitante Totem"
+        ),
+        "Email": (
+            slots.get("correo")
+            or slots.get("email")
+            or slots.get("Email")
+        ),
+        "Phone": (
+            slots.get("telefono")
+            or slots.get("phone")
+            or slots.get("Phone")
+        ),
+        "OBJETIVO": (
+            slots.get("diagnostico")
+            or slots.get("objetivo")
+            or slots.get("OBJETIVO")
+        ),
+    }
+
+
 def _normalizar_respuesta_dialog_engine(
     raw_resp: Any,
-) -> tuple[str, Dict[str, Any], List[str], bool]:
+) -> tuple[str, Dict[str, Any], List[str], bool, bool]:
     """
     Adapta lo que devuelva procesar_turno_dialogo a:
-    (assistant_text, slots, campos_pendientes, campos_completos)
+    (assistant_text, slots, campos_pendientes, campos_completos, es_despedida)
 
     Soporta dos formas:
-    1) dict con llaves: assistant_text/reply, slots, campos_pendientes, ready_for_proposal
-    2) tupla/lista: (assistant_text, slots, campos_pendientes, campos_completos)
+    1) dict con llaves:
+       - assistant_text / respuesta / reply
+       - slots / slots_detectados
+       - campos_pendientes / pending_fields
+       - campos_completos / ready_for_proposal
+       - es_despedida_model / end_of_conversation (opcional)
+    2) tupla/lista:
+       - (assistant_text, slots, campos_pendientes, campos_completos)
+       - o (assistant_text, slots, campos_pendientes, campos_completos, es_despedida)
     """
+    es_despedida = False
+
     # Caso 1: dict
     if isinstance(raw_resp, dict):
         assistant_text = (
@@ -198,11 +262,34 @@ def _normalizar_respuesta_dialog_engine(
 
         campos_completos = bool(campos_completos)
 
-        return assistant_text, slots, campos_pendientes, campos_completos
+        # Bandera de despedida (si el modelo la manda)
+        es_despedida_val = (
+            raw_resp.get("es_despedida_model")
+            or raw_resp.get("end_of_conversation")
+        )
+        if isinstance(es_despedida_val, str):
+            es_despedida = es_despedida_val.lower() in (
+                "true",
+                "1",
+                "yes",
+                "si",
+                "sí",
+            )
+        elif isinstance(es_despedida_val, bool):
+            es_despedida = es_despedida_val
+        else:
+            es_despedida = False
 
-    # Caso 2: tupla/lista clásica (assistant_text, slots, campos_pendientes, campos_completos)
+        return assistant_text, slots, campos_pendientes, campos_completos, es_despedida
+
+    # Caso 2: tupla/lista clásica
     if isinstance(raw_resp, (list, tuple)) and len(raw_resp) >= 4:
-        assistant_text, slots, campos_pendientes, campos_completos = raw_resp[:4]
+        # Soportamos opcionalmente un 5º elemento = es_despedida
+        if len(raw_resp) >= 5:
+            assistant_text, slots, campos_pendientes, campos_completos, es_despedida_val = raw_resp[:5]
+        else:
+            assistant_text, slots, campos_pendientes, campos_completos = raw_resp[:4]
+            es_despedida_val = False
 
         if not isinstance(slots, dict):
             logger.warning(
@@ -215,7 +302,19 @@ def _normalizar_respuesta_dialog_engine(
             campos_pendientes = []
 
         campos_completos = bool(campos_completos)
-        return assistant_text, slots, campos_pendientes, campos_completos
+
+        if isinstance(es_despedida_val, str):
+            es_despedida = es_despedida_val.lower() in (
+                "true",
+                "1",
+                "yes",
+                "si",
+                "sí",
+            )
+        else:
+            es_despedida = bool(es_despedida_val)
+
+        return assistant_text, slots, campos_pendientes, campos_completos, es_despedida
 
     # Cualquier otra cosa es inesperada
     logger.error(
@@ -234,8 +333,6 @@ async def on_startup() -> None:
     logger.info("🚀 Totem Evolución IA3 iniciado correctamente.")
     logger.info("🎥 Activando detector de personas...")
     try:
-        # Nota: Si iniciar_detector() es una función síncrona que bloquea
-        # el hilo por mucho tiempo, idealmente debe ser envuelta en asyncio.to_thread().
         iniciar_detector()
     except Exception:
         logger.exception("Error al iniciar el detector de personas.")
@@ -278,7 +375,7 @@ async def session_start():
 async def _enviar_slots_al_ui(respuesta: dict) -> None:
     """
     Empuja al visor (ui.py) la info básica del lead para el panel CRM.
-    
+
     ¡IMPORTANTE! Ahora es una función asíncrona usando httpx para evitar bloqueos.
 
     Usa el servidor HTTP de Nacho en NACHO_BASE_URL (por defecto http://localhost:7000).
@@ -333,6 +430,9 @@ async def chat_turn(payload: ChatTurnRequest):
     - Regresa la respuesta en texto y banderas de control.
     - Si ya tenemos nombre y empresa, DISPARA LA PROPUESTA y la INFOGRAFÍA
       (una sola vez cada una por sesión), AUNQUE haya campos pendientes.
+    - Cuando la conversación YA ES UNA DESPEDIDA y los campos obligatorios
+      están completos, se manda el lead a Zoho CRM una sola vez, usando
+      exactamente el mismo payload que tu script de prueba directo.
 
     IMPORTANTE:
     - Acepta tanto "texto_usuario" como "texto" en el body.
@@ -360,14 +460,15 @@ async def chat_turn(payload: ChatTurnRequest):
     # ------------------------------------------------------
     try:
         raw_resp = procesar_turno_dialogo(session_id, texto_usuario_limpio)
-        assistant_text, slots, campos_pendientes, campos_completos = (
+        assistant_text, slots, campos_pendientes, campos_completos, es_despedida = (
             _normalizar_respuesta_dialog_engine(raw_resp)
         )
 
         logger.info(
-            "Resultado normalizado de dialog_engine: respuesta='%s', campos_completos=%s",
+            "Resultado normalizado de dialog_engine: respuesta='%s', campos_completos=%s, es_despedida=%s",
             assistant_text,
             campos_completos,
+            es_despedida,
         )
         logger.info(
             "[%s] slots=%r | pendientes=%r | ready_minimos=%s",
@@ -384,22 +485,22 @@ async def chat_turn(payload: ChatTurnRequest):
         )
 
     # ------------------------------------------------------
-    # 2) Disparo de propuesta e infografía
-    #    (aquí YA se tienen los slots actualizados)
+    # 2) Disparo de propuesta, infografía y LEAD en CRM
     # ------------------------------------------------------
     meta = _get_sesion_meta(session_id)
     ready_minimos = _tiene_minimos_para_propuesta(slots)
 
     logger.info(
-        "[%s] meta_inicio: proposal_enviada=%s, infografia_generada=%s, ready_minimos=%s",
+        "[%s] meta_inicio: proposal_enviada=%s, infografia_generada=%s, lead_creado=%s, ready_minimos=%s",
         session_id,
         meta["proposal_enviada"],
         meta["infografia_generada"],
+        meta["lead_creado"],
         ready_minimos,
     )
 
+    # -------- Propuesta (Zoho Flow) --------
     if ready_minimos:
-        # -------- Propuesta (Zoho Flow) --------
         if generar_propuesta_pdf is not None and not meta["proposal_enviada"]:
             meta["proposal_enviada"] = True
             logger.info(
@@ -442,7 +543,7 @@ async def chat_turn(payload: ChatTurnRequest):
                 )
             except Exception:
                 logger.exception(
-                    "[%s] Error en generar_infografia_png (PIL / escritura de archivos).",
+                    "[%s] Error en generar_infografia_png (generación local de archivos).",
                     session_id,
                 )
         elif generar_infografia_png is None:
@@ -451,9 +552,40 @@ async def chat_turn(payload: ChatTurnRequest):
                 session_id,
             )
 
+    # -------- Lead en Zoho CRM --------
+    # SOLO cuando:
+    #   - es_despedida == True (ya es turno de despedida)
+    #   - campos_completos == True (ya están nombre, empresa, correo, teléfono, diagnóstico)
+    #   - crear_lead_en_crm disponible
+    #   - y aún no se haya creado lead para esta sesión
+    if (
+        es_despedida
+        and campos_completos
+        and crear_lead_en_crm is not None
+        and not meta["lead_creado"]
+    ):
+        meta["lead_creado"] = True
+        try:
+            payload_crm = _mapear_slots_para_crm(slots)
+            logger.info(
+                "[%s] Enviando lead a Zoho CRM con payload (como el script de prueba): %r",
+                session_id,
+                payload_crm,
+            )
+            # crear_lead_en_crm es síncrona (requests), la mandamos a un thread
+            await asyncio.to_thread(crear_lead_en_crm, payload_crm)
+            logger.info("[%s] Lead creado en Zoho CRM correctamente.", session_id)
+        except Exception:
+            logger.exception("[%s] Error al crear lead en Zoho CRM.", session_id)
+    elif es_despedida and campos_completos and crear_lead_en_crm is None:
+        logger.warning(
+            "[%s] crear_lead_en_crm es None; NO se creó lead en Zoho CRM.",
+            session_id,
+        )
+
     # ------------------------------------------------------
     # 3) Calcular progreso para el panel (opcional)
-    #    Usamos CAMPOS_REQUERIDOS como referencia de total
+    #    Usamos CAMPOS_REQUERIDOS como referencia de total
     # ------------------------------------------------------
     try:
         campos_totales = len(CAMPOS_REQUERIDOS) or 1
@@ -469,32 +601,33 @@ async def chat_turn(payload: ChatTurnRequest):
     # ------------------------------------------------------
     # 4) Respuesta al front / cámara
     # ------------------------------------------------------
-    # FIX: Se usa 'payload' en lugar de la variable indefinida 'req'.
     # Usamos el valor original del campo texto_usuario o texto (si texto_usuario es None)
-    input_text_for_response = payload.texto_usuario if payload.texto_usuario is not None else payload.texto
-    
+    input_text_for_response = (
+        payload.texto_usuario if payload.texto_usuario is not None else payload.texto
+    )
+
     respuesta = {
-    "session_id": session_id,
-    "texto_usuario": input_text_for_response,
-    "respuesta": assistant_text,
-    "slots": slots,
-    "campos_pendientes": campos_pendientes,
-    "campos_completos": bool(campos_completos),
-    "campos_totales": campos_totales,
-    "campos_llenos": campos_llenos,
-    "progreso": progreso,  # 0.0–1.0
-    # Por ahora el flujo de voz no usa 'terminar', lo dejamos siempre False
-    "terminar": False,
-    "resultado_bruto": [
-        assistant_text,
-        slots,
-        campos_pendientes,
-        bool(campos_completos),
-    ],
+        "session_id": session_id,
+        "texto_usuario": input_text_for_response,
+        "respuesta": assistant_text,
+        "slots": slots,
+        "campos_pendientes": campos_pendientes,
+        "campos_completos": bool(campos_completos),
+        "campos_totales": campos_totales,
+        "campos_llenos": campos_llenos,
+        "progreso": progreso,  # 0.0–1.0
+        "terminar": False,  # por ahora el flujo de voz no usa 'terminar'
+        "resultado_bruto": [
+            assistant_text,
+            slots,
+            campos_pendientes,
+            bool(campos_completos),
+        ],
+        "es_despedida": bool(es_despedida),
     }
+
     # 5) Empujar estado al visor (panel CRM abajo del UI)
     try:
-        # La función _enviar_slots_al_ui es asíncrona (usa httpx), por eso requiere await
         await _enviar_slots_al_ui(respuesta)
     except Exception:
         # Nunca queremos tumbar el backend solo por un problema visual

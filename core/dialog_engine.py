@@ -98,8 +98,7 @@ except Exception as e:
 # Campos requeridos del Totem (para la propuesta)
 # ---------------------------------------------------------------------
 
-# Campos base obligatorios para poder disparar propuesta / infografía
-# (seguimos incluyendo "diagnostico" porque se usa en Zoho/Flow)
+# Campos base obligatorios para poder disparar propuesta / infografía / lead CRM
 CAMPOS_REQUERIDOS: List[str] = [
     "nombre",
     "empresa",
@@ -109,6 +108,14 @@ CAMPOS_REQUERIDOS: List[str] = [
 ]
 
 CAMPOS_REQUERIDOS_DESC = "\n".join(f"- {c}" for c in CAMPOS_REQUERIDOS)
+
+# 🔴 FORCED EXIT: palabras clave para cortar conversación aunque falten campos
+FORCED_EXIT_KEYWORDS: List[str] = [
+    "terminar totem",
+    # puedes agregar más si quieres:
+    # "fin totem",
+    # "cortar totem",
+]
 
 # ---------------------------------------------------------------------
 # Knowledge pack de productos Zoho (core/knowledge_pack)
@@ -141,7 +148,6 @@ PRODUCT_SYNONYMS: Dict[str, List[str]] = {
     "zoho_workplace": ["workplace", "zoho workplace"],
     "zoho_finance_plus": ["finance plus", "zoho finance plus"],
     "zoho_one_essentials": ["one essentials", "zoho one essentials"],
-    # puedes extender según lo necesites
 }
 
 # Config de preguntas de diagnóstico por producto y el nombre de slot detalle_*
@@ -611,17 +617,20 @@ con esta estructura:
       "solucion_a_implementar": "si describe su solución a implementar",
       "detalle_zoho_crm": "si describe su situación de CRM",
       "detalle_salesiq": "si describe su situación de chats/mensajes web",
-      "detalle_desk": "si describe su situación de soporte",
-      "...": "puedes incluir aquí cualquiera de los slots detalle_* de arriba"
+      "detalle_desk": "si describe su situación de soporte"
   }},
   "campos_pendientes_model": ["lista de campos obligatorios que sigan faltando"],
-  "campos_completos_model": false
+  "campos_completos_model": false,
+  "es_despedida_model": false
 }}
 
 - "assistant_text" debe ser una frase lista para decirse en voz alta, muy fluida y humana.
 - "slots_detectados" SOLO debe contener los campos que hayas detectado en ese turno.
 - "campos_pendientes_model" es tu mejor estimación de qué campos obligatorios siguen faltando.
 - "campos_completos_model" debe ser true SOLO si crees que ya están todos los obligatorios.
+- "es_despedida_model" debe ser true SOLO cuando estés claramente cerrando la conversación
+  (por ejemplo: el usuario se despide, tú respondes con un agradecimiento y un cierre amable),
+  y ya no planeas seguir haciendo más preguntas en turnos siguientes.
 """
 
 
@@ -699,6 +708,7 @@ def _llamar_modelo(messages: List[Dict[str, str]]) -> Dict[str, Any]:
         - slots_detectados: dict
         - campos_pendientes_model: list
         - campos_completos_model: bool
+        - es_despedida_model: bool (opcional, por defecto False)
     """
     if _CLIENT is None:
         logger.error(
@@ -712,6 +722,7 @@ def _llamar_modelo(messages: List[Dict[str, str]]) -> Dict[str, Any]:
             "slots_detectados": {},
             "campos_pendientes_model": CAMPOS_REQUERIDOS,
             "campos_completos_model": False,
+            "es_despedida_model": False,
         }
 
     try:
@@ -752,13 +763,14 @@ def _llamar_modelo(messages: List[Dict[str, str]]) -> Dict[str, Any]:
             "slots_detectados": {},
             "campos_pendientes_model": CAMPOS_REQUERIDOS,
             "campos_completos_model": False,
+            "es_despedida_model": False,
         }
 
 
 def procesar_turno_dialogo(
     session_id: str,
     texto_usuario: str,
-) -> Tuple[str, Dict[str, Any], List[str], bool]:
+) -> Tuple[str, Dict[str, Any], List[str], bool, bool]:
     """
     Función principal llamada desde amain.py (/chat/turn).
 
@@ -771,9 +783,43 @@ def procesar_turno_dialogo(
         - slots: dict con los campos acumulados de la sesión.
         - campos_pendientes: lista de campos obligatorios que faltan (calculado).
         - campos_completos: bool -> True si ya están todos los obligatorios.
+        - es_despedida: bool -> True si este turno se considera una despedida.
     """
     texto_usuario = (texto_usuario or "").strip()
     session_state = _get_session_state(session_id)
+
+    # 🔴 FORCED EXIT: si el usuario dice la palabra clave, cortamos aquí
+    texto_lower = texto_usuario.lower()
+    for kw in FORCED_EXIT_KEYWORDS:
+        if kw in texto_lower:
+            slots = session_state.get("slots", {})
+            if not isinstance(slots, dict):
+                slots = {}
+            campos_pendientes = [c for c in CAMPOS_REQUERIDOS if not slots.get(c)]
+            campos_completos = len(campos_pendientes) == 0
+            assistant_text = (
+                "Perfecto, lo dejamos hasta aquí. "
+                "Muchas gracias por tu tiempo y que tengas un excelente día."
+            )
+            es_despedida = True
+
+            # Guardamos en historial para coherencia
+            session_state.setdefault("historial", []).append(
+                {"role": "user", "content": texto_usuario}
+            )
+            session_state["historial"].append(
+                {"role": "assistant", "content": assistant_text}
+            )
+
+            logger.info(
+                "[dialog_engine] session_id=%s | FORCED_EXIT por keyword=%r | slots=%r | pendientes=%r | completos=%s",
+                session_id,
+                kw,
+                slots,
+                campos_pendientes,
+                campos_completos,
+            )
+            return assistant_text, slots, campos_pendientes, campos_completos, es_despedida
 
     if not texto_usuario:
         assistant_text = (
@@ -790,7 +836,8 @@ def procesar_turno_dialogo(
             slots = {}
         campos_pendientes = [c for c in CAMPOS_REQUERIDOS if not slots.get(c)]
         campos_completos = len(campos_pendientes) == 0
-        return assistant_text, slots, campos_pendientes, campos_completos
+        es_despedida = False
+        return assistant_text, slots, campos_pendientes, campos_completos, es_despedida
 
     # Construimos mensajes para el modelo
     messages = _build_messages(session_state, texto_usuario)
@@ -829,6 +876,13 @@ def procesar_turno_dialogo(
     if campos_completos:
         session_state["fase"] = "confirmacion_final"
 
+    # Bandera de despedida que viene del modelo
+    es_despedida_raw = data.get("es_despedida_model", False)
+    if isinstance(es_despedida_raw, str):
+        es_despedida = es_despedida_raw.lower() in ("true", "1", "yes", "si", "sí")
+    else:
+        es_despedida = bool(es_despedida_raw)
+
     # Guardamos historial solo con texto normal (sin JSON interno)
     session_state.setdefault("historial", []).append(
         {"role": "user", "content": texto_usuario}
@@ -838,12 +892,13 @@ def procesar_turno_dialogo(
     )
 
     logger.info(
-        "[dialog_engine] session_id=%s | fase=%s | slots=%r | pendientes=%r | completos=%s",
+        "[dialog_engine] session_id=%s | fase=%s | slots=%r | pendientes=%r | completos=%s | es_despedida=%s",
         session_id,
         session_state.get("fase"),
         slots,
         campos_pendientes,
         campos_completos,
+        es_despedida,
     )
 
-    return assistant_text, slots, campos_pendientes, campos_completos
+    return assistant_text, slots, campos_pendientes, campos_completos, es_despedida
