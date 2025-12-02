@@ -1139,9 +1139,11 @@ class TextVisemeDemo(ShowBase):
             "nombre":      data.get("nombre")      or data.get("name"),
             "empresa":     data.get("empresa")     or data.get("company"),
             "correo":      data.get("correo")      or data.get("email"),
-            "telefono":    data.get("telefono"),
+            # 👉 También acepta phone / Phone por si viene así
+            "telefono":    data.get("telefono")    or data.get("phone") or data.get("Phone"),
             "diagnostico": data.get("diagnostico") or data.get("proposal"),
         }
+
 
         for key, node_np in self._crm_value_nodes.items():
             val = normalizado.get(key, "-")
@@ -1265,7 +1267,8 @@ class NachoRequestHandler(BaseHTTPRequestHandler):
                 "nombre":      qs.get("nombre", [""])[0]      or qs.get("name", [""])[0],
                 "empresa":     qs.get("empresa", [""])[0]     or qs.get("company", [""])[0],
                 "correo":      qs.get("correo", [""])[0]      or qs.get("email", [""])[0],
-                "telefono":    qs.get("telefono", [""])[0],
+                # 👉 Ahora también acepta ?phone= o ?Phone= además de ?telefono=
+                "telefono":    qs.get("telefono", [""])[0]    or qs.get("phone", [""])[0] or qs.get("Phone", [""])[0],
                 "diagnostico": qs.get("diagnostico", [""])[0] or qs.get("proposal", [""])[0],
             }
 
@@ -1277,6 +1280,7 @@ class NachoRequestHandler(BaseHTTPRequestHandler):
                 print(msg)
                 self._send_response(500, msg)
             return
+
         # -------------------------------------------------------
 
         # Modo texto normal (lo que ya tenías)

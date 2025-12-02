@@ -99,12 +99,13 @@ except Exception as e:
 # ---------------------------------------------------------------------
 
 # Campos base obligatorios para poder disparar propuesta / infografía / lead CRM
+# ✅ diagnostico DEJA DE SER OBLIGATORIO: ya NO aparece en esta lista
 CAMPOS_REQUERIDOS: List[str] = [
     "nombre",
     "empresa",
     "correo",
     "telefono",
-    "diagnostico",
+    # "diagnostico",  # 👈 diagnostico ahora es opcional
 ]
 
 CAMPOS_REQUERIDOS_DESC = "\n".join(f"- {c}" for c in CAMPOS_REQUERIDOS)

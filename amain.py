@@ -21,6 +21,22 @@ logger = get_logger(__name__)
 NACHO_BASE_URL = os.getenv("NACHO_BASE_URL", "http://localhost:7000").rstrip("/")
 
 # ----------------------------------------------------------
+# PALABRAS CLAVE DE CIERRE RÁPIDO
+# ----------------------------------------------------------
+END_KEYWORDS = [
+    
+    "gracias, nacho",
+    "ya es todo",
+    "ya termine",
+    "ya terminé",
+    "eso es todo",
+    "listo gracias",
+    "listo, gracias",
+    "adios",
+    "adiós",
+]
+
+# ----------------------------------------------------------
 # Import opcional de funciones de propuesta / infografía
 # ----------------------------------------------------------
 try:
@@ -153,7 +169,7 @@ def _get_sesion_meta(session_id: str) -> Dict[str, Any]:
 def _tiene_minimos_para_propuesta(slots: Dict[str, Any]) -> bool:
     """
     Condición mínima para disparar proposal / infografía,
-    AUNQUE haya campos pendientes (como pediste).
+    AUNQUE haya campos pendientes.
 
     Por ahora: tener al menos nombre y empresa.
     """
@@ -389,6 +405,13 @@ async def _enviar_slots_al_ui(respuesta: dict) -> None:
         email = slots.get("correo") or slots.get("email") or ""
         nombre = slots.get("nombre") or slots.get("name") or ""
         empresa = slots.get("empresa") or slots.get("company") or ""
+        # 👉 Nuevo: teléfono para el panel CRM del UI
+        telefono = (
+            slots.get("telefono")
+            or slots.get("phone")
+            or slots.get("Phone")
+            or ""
+        )
 
         pendientes = respuesta.get("campos_pendientes") or []
         progreso = respuesta.get("progreso", None)
@@ -405,6 +428,7 @@ async def _enviar_slots_al_ui(respuesta: dict) -> None:
             "email": email,
             "name": nombre,
             "company": empresa,
+            "phone": telefono,   # 👈 se envía también al UI
             "proposal": proposal,
         }
 
@@ -431,16 +455,14 @@ async def chat_turn(payload: ChatTurnRequest):
     - Si ya tenemos nombre y empresa, DISPARA LA PROPUESTA y la INFOGRAFÍA
       (una sola vez cada una por sesión), AUNQUE haya campos pendientes.
     - Cuando la conversación YA ES UNA DESPEDIDA y los campos obligatorios
-      están completos, se manda el lead a Zoho CRM una sola vez, usando
-      exactamente el mismo payload que tu script de prueba directo.
-
-    IMPORTANTE:
-    - Acepta tanto "texto_usuario" como "texto" en el body.
-      Esto evita el error 422 con la versión actual de core.camera_agent.
-    - NO hace TTS aquí. El TTS lo maneja core.camera_agent para evitar duplicados.
+      están completos, se manda el lead a Zoho CRM una sola vez.
+    - EXTRA: si el usuario dice una PALABRA CLAVE de cierre rápido
+      (ej. 'gracias nacho', 'ya es todo'), se fuerza el cierre:
+         * es_despedida = True
+         * terminar = True
+         * se intenta mandar el lead al CRM AUNQUE falten campos.
     """
     session_id = payload.session_id
-    # El texto limpio, que se usa para llamar a procesar_turno_dialogo
     texto_usuario_limpio = (payload.texto_usuario or payload.texto or "").strip()
 
     if not texto_usuario_limpio:
@@ -456,6 +478,18 @@ async def chat_turn(payload: ChatTurnRequest):
     )
 
     # ------------------------------------------------------
+    # 0) Detectar si el usuario dijo la PALABRA CLAVE de cierre rápido
+    # ------------------------------------------------------
+    texto_lower = texto_usuario_limpio.lower().strip()
+    cierre_forzado_por_keyword = texto_lower in END_KEYWORDS
+    if cierre_forzado_por_keyword:
+        logger.info(
+            "[%s] CIERRE RÁPIDO por keyword detectada ('%s').",
+            session_id,
+            texto_lower,
+        )
+
+    # ------------------------------------------------------
     # 1) Llamar al motor de diálogo y normalizar respuesta
     # ------------------------------------------------------
     try:
@@ -463,6 +497,11 @@ async def chat_turn(payload: ChatTurnRequest):
         assistant_text, slots, campos_pendientes, campos_completos, es_despedida = (
             _normalizar_respuesta_dialog_engine(raw_resp)
         )
+
+        # Si entramos por palabra clave, FORZAMOS que sea despedida,
+        # aunque el modelo no lo haya marcado.
+        if cierre_forzado_por_keyword:
+            es_despedida = True
 
         logger.info(
             "Resultado normalizado de dialog_engine: respuesta='%s', campos_completos=%s, es_despedida=%s",
@@ -510,7 +549,7 @@ async def chat_turn(payload: ChatTurnRequest):
                 slots.get("empresa"),
             )
             try:
-                # Tu función en core/proposal_trigger.py es async → la esperamos aquí
+                # generar_propuesta_pdf es async → la esperamos aquí
                 await generar_propuesta_pdf(slots)  # type: ignore[arg-type]
                 logger.info(
                     "[%s] generar_propuesta_pdf finalizó (revisa logs de Zoho Flow / archivo JSON).",
@@ -553,27 +592,33 @@ async def chat_turn(payload: ChatTurnRequest):
             )
 
     # -------- Lead en Zoho CRM --------
-    # SOLO cuando:
-    #   - es_despedida == True (ya es turno de despedida)
-    #   - campos_completos == True (ya están nombre, empresa, correo, teléfono, diagnóstico)
+    # CASO 1 (normal):
+    #   - es_despedida == True
+    #   - campos_completos == True
+    # CASO 2 (CIERRE RÁPIDO):
+    #   - cierre_forzado_por_keyword == True
+    #
+    # En ambos casos:
     #   - crear_lead_en_crm disponible
-    #   - y aún no se haya creado lead para esta sesión
+    #   - aún no se haya creado lead para esta sesión
+    crear_lead_condicion_normal = es_despedida and campos_completos
+    crear_lead_condicion_forzada = cierre_forzado_por_keyword
+
     if (
-        es_despedida
-        and campos_completos
-        and crear_lead_en_crm is not None
+        crear_lead_en_crm is not None
         and not meta["lead_creado"]
+        and (crear_lead_condicion_normal or crear_lead_condicion_forzada)
     ):
         meta["lead_creado"] = True
         try:
             payload_crm = _mapear_slots_para_crm(slots)
             logger.info(
-                "[%s] Enviando lead a Zoho CRM con payload (como el script de prueba): %r",
+                "[%s] Enviando lead a Zoho CRM con payload: %r",
                 session_id,
                 payload_crm,
             )
-            # crear_lead_en_crm es síncrona (requests), la mandamos a un thread
-            await asyncio.to_thread(crear_lead_en_crm, payload_crm)
+            # 🔴 LLAMADA DIRECTA, SÍNCRONA (igual que tu script de prueba):
+            crear_lead_en_crm(payload_crm)
             logger.info("[%s] Lead creado en Zoho CRM correctamente.", session_id)
         except Exception:
             logger.exception("[%s] Error al crear lead en Zoho CRM.", session_id)
@@ -601,10 +646,14 @@ async def chat_turn(payload: ChatTurnRequest):
     # ------------------------------------------------------
     # 4) Respuesta al front / cámara
     # ------------------------------------------------------
-    # Usamos el valor original del campo texto_usuario o texto (si texto_usuario es None)
     input_text_for_response = (
         payload.texto_usuario if payload.texto_usuario is not None else payload.texto
     )
+
+    # terminamos conversación si:
+    #   - el modelo marcó es_despedida
+    #   - O hubo cierre rápido por keyword
+    terminar_flag = bool(es_despedida or cierre_forzado_por_keyword)
 
     respuesta = {
         "session_id": session_id,
@@ -616,7 +665,7 @@ async def chat_turn(payload: ChatTurnRequest):
         "campos_totales": campos_totales,
         "campos_llenos": campos_llenos,
         "progreso": progreso,  # 0.0–1.0
-        "terminar": False,  # por ahora el flujo de voz no usa 'terminar'
+        "terminar": terminar_flag,
         "resultado_bruto": [
             assistant_text,
             slots,
@@ -624,16 +673,21 @@ async def chat_turn(payload: ChatTurnRequest):
             bool(campos_completos),
         ],
         "es_despedida": bool(es_despedida),
+        "cierre_forzado_por_keyword": bool(cierre_forzado_por_keyword),
     }
 
     # 5) Empujar estado al visor (panel CRM abajo del UI)
     try:
         await _enviar_slots_al_ui(respuesta)
     except Exception:
-        # Nunca queremos tumbar el backend solo por un problema visual
         logger.exception("Error al enviar datos al panel CRM del visor")
 
     logger.info("Respuesta normalizada para /chat/turn: %r", respuesta)
+
+    # Opcional: limpiar meta cuando se termina conversación
+    if terminar_flag:
+        logger.info("[%s] Conversación marcada como TERMINADA. Limpiando meta de sesión.", session_id)
+        SESIONES.pop(session_id, None)
 
     return respuesta
 
