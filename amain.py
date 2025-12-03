@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*- 
 """
 amain.py — Punto de entrada FastAPI para Totem Evolución IA3
 """
@@ -10,15 +10,19 @@ from typing import Optional, Any, Dict, List
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 import httpx  # Cliente HTTP asíncrono
+import urllib.parse
+import os
+import json  # 👈 NUEVO: para guardar estado en JSON
 
 from core.logger import get_logger
 from core.dialog_engine import procesar_turno_dialogo, CAMPOS_REQUERIDOS
 from core.camera_agent import iniciar_detector  # Detector de personas (YOLO + cámara)
-import urllib.parse
-import os
 
 logger = get_logger(__name__)
 NACHO_BASE_URL = os.getenv("NACHO_BASE_URL", "http://localhost:7000").rstrip("/")
+
+# Archivo JSON donde se guardará el estado normalizado de sesiones
+JSON_STATE_FILE = os.getenv("TOTEM_STATE_JSON", "totem_sessions_state.json")
 
 # ----------------------------------------------------------
 # PALABRAS CLAVE DE CIERRE RÁPIDO
@@ -367,6 +371,52 @@ def _normalizar_respuesta_dialog_engine(
 
 
 # ----------------------------------------------------------
+# Helper: guardar estado normalizado en JSON
+# ----------------------------------------------------------
+def _guardar_estado_json(session_id: str, respuesta: Dict[str, Any]) -> None:
+    """
+    Guarda/actualiza el estado normalizado de la sesión en un archivo JSON.
+
+    Estructura del JSON:
+    {
+      "session_id_1": { ...respuesta... },
+      "session_id_2": { ... }
+    }
+    """
+    try:
+        data: Dict[str, Any] = {}
+        if os.path.exists(JSON_STATE_FILE):
+            try:
+                with open(JSON_STATE_FILE, "r", encoding="utf-8") as f:
+                    data = json.load(f) or {}
+                if not isinstance(data, dict):
+                    data = {}
+            except Exception:
+                # Si el archivo está corrupto u otra cosa, lo reseteamos
+                logger.warning(
+                    "[JSON] No se pudo leer/parsing %s, se reinicia estructura.",
+                    JSON_STATE_FILE,
+                )
+                data = {}
+
+        # Actualizamos solo la entrada de esta sesión
+        data[session_id] = respuesta
+
+        with open(JSON_STATE_FILE, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+
+        logger.info(
+            "[JSON] Estado de sesión %s guardado/actualizado en %s",
+            session_id,
+            JSON_STATE_FILE,
+        )
+    except Exception:
+        logger.exception(
+            "[JSON] Error guardando estado normalizado de la sesión en archivo."
+        )
+
+
+# ----------------------------------------------------------
 # Eventos de arranque y apagado
 # ----------------------------------------------------------
 @app.on_event("startup")
@@ -660,89 +710,85 @@ async def chat_turn(payload: ChatTurnRequest):
             # ------------------------------------------------------
             # Flujo WhatsApp + Email + Infografía (si está disponible)
             # ------------------------------------------------------
-            if flujo_infografia_whatsapp_email is not None:
-                nombre_cliente = (
-                    slots.get("nombre")
-                    or slots.get("Name")
-                    or "Visitante Totem"
-                )
-                empresa_cliente = (
-                    slots.get("empresa")
-                    or slots.get("Company")
-                    or "Visitante Totem"
-                )
-                objetivo_cliente = (
-                    slots.get("solucion_a_implementar")
-                    or slots.get("objetivo")
-                    or slots.get("OBJETIVO")
-                    or slots.get("diagnostico")
-                    or ""
-                )
+           
+            nombre_cliente = (
+                slots.get("nombre")
+                or slots.get("Name")
+                or "Visitante Totem"
+            )
+            empresa_cliente = (
+                slots.get("empresa")
+                or slots.get("Company")
+                or "Visitante Totem"
+            )
+            objetivo_cliente = (
+                slots.get("solucion_a_implementar")
+                or slots.get("objetivo")
+                or slots.get("OBJETIVO")
+                or slots.get("diagnostico")
+                or ""
+            )
 
-                problemas = slots.get("problemas") or slots.get("retos") or ""
-                necesidades = slots.get("necesidades") or slots.get("necesidades_clave") or ""
-                soluciones = (
-                    slots.get("soluciones")
-                    or slots.get("productos")
-                    or slots.get("solucion")
-                    or []
-                )
+            problemas = slots.get("problemas") or slots.get("retos") or ""
+            necesidades = slots.get("necesidades") or slots.get("necesidades_clave") or ""
+            soluciones = (
+                slots.get("soluciones")
+                or slots.get("productos")
+                or slots.get("solucion")
+                or []
+            )
 
-                datos_cliente: Dict[str, Any] = {
-                    "nombre": nombre_cliente,
-                    "empresa": empresa_cliente,
-                    "OBJETIVO": objetivo_cliente,
-                    "problemas": problemas,
-                    "necesidades": necesidades,
-                    "soluciones": soluciones,
-                    "_slots_raw": slots,
-                }
+            datos_cliente: Dict[str, Any] = {
+                "nombre": nombre_cliente,
+                "empresa": empresa_cliente,
+                "OBJETIVO": objetivo_cliente,
+                "problemas": problemas,
+                "necesidades": necesidades,
+                "soluciones": soluciones,
+                "_slots_raw": slots,
+            }
 
-                telefono_cliente = (
-                    slots.get("telefono")
-                    or slots.get("phone")
-                    or slots.get("Phone")
-                    or None
-                )
-                email_cliente = (
-                    slots.get("correo")
-                    or slots.get("email")
-                    or slots.get("Email")
-                    or None
-                )
+            telefono_cliente = (
+                slots.get("telefono")
+                or slots.get("phone")
+                or slots.get("Phone")
+                or None
+            )
+            email_cliente = (
+                slots.get("correo")
+                or slots.get("email")
+                or slots.get("Email")
+                or None
+            )
 
-                nombre_archivo = f"infografia_{empresa_cliente}".replace(" ", "_")
+            nombre_archivo = f"infografia_{empresa_cliente}".replace(" ", "_")
 
-                logger.info(
-                    "[%s] Disparando flujo_infografia_whatsapp_email (SINCRONO) con telefono=%r, email=%r, nombre_archivo=%r",
-                    session_id,
-                    telefono_cliente,
-                    email_cliente,
-                    nombre_archivo,
-                )
+            logger.info(
+                "[%s] Disparando flujo_infografia_whatsapp_email (SINCRONO) con telefono=%r, email=%r, nombre_archivo=%r",
+                session_id,
+                telefono_cliente,
+                email_cliente,
+                nombre_archivo,
+            )
 
-                # 👇 PRINT para verlo clarito en consola
-                print(
-                    f">>> [{session_id}] EJECUTANDO flujo_infografia_whatsapp_email PARA {nombre_cliente} / {empresa_cliente}"
-                )
+            # 👇 PRINT para verlo clarito en consola
+            print(
+                f">>> [{session_id}] EJECUTANDO flujo_infografia_whatsapp_email PARA {nombre_cliente} / {empresa_cliente}"
+            )
 
-                flujo_infografia_whatsapp_email(
-                    datos_cliente,
-                    telefono_cliente,
-                    email_cliente,
-                    nombre_archivo,
-                    True,   # enviar_whatsapp
-                    True,   # enviar_email
-                )
-                logger.info(
-                    "[%s] flujo_infografia_whatsapp_email finalizó correctamente.",
-                    session_id,
-                )
-            else:
-                logger.warning(
-                    "[%s] flujo_infografia_whatsapp_email es None; NO se ejecutó flujo de WhatsApp/Email.",
-                    session_id,
-                )
+            flujo_infografia_whatsapp_email(
+                datos_cliente,
+                telefono_cliente,
+                email_cliente,
+                nombre_archivo,
+                True,   # enviar_whatsapp
+                True,   # enviar_email
+            )
+            logger.info(
+                "[%s] flujo_infografia_whatsapp_email finalizó correctamente.",
+                session_id,
+            )
+        
 
         except Exception:
             logger.exception(
@@ -782,7 +828,7 @@ async def chat_turn(payload: ChatTurnRequest):
     #   - O hubo cierre rápido por keyword
     terminar_flag = bool(es_despedida or cierre_forzado_por_keyword)
 
-    respuesta = {
+    respuesta: Dict[str, Any] = {
         "session_id": session_id,
         "texto_usuario": input_text_for_response,
         "respuesta": assistant_text,
@@ -802,6 +848,15 @@ async def chat_turn(payload: ChatTurnRequest):
         "es_despedida": bool(es_despedida),
         "cierre_forzado_por_keyword": bool(cierre_forzado_por_keyword),
     }
+
+    # 4.5) Guardar en JSON el estado normalizado de esta sesión
+    try:
+        _guardar_estado_json(session_id, respuesta)
+    except Exception:
+        # No rompemos el flujo si falla la escritura
+        logger.exception(
+            "[JSON] Error al intentar guardar el estado normalizado de la sesión."
+        )
 
     # 5) Empujar estado al visor (panel CRM abajo del UI)
     try:

@@ -1,0 +1,38 @@
+{
+  "3686f22f-dba4-4241-8473-8ec0fbdb0800": {
+    "session_id": "3686f22f-dba4-4241-8473-8ec0fbdb0800",
+    "texto_usuario": "Con eso estoy bien Nacho, muchas gracias, nos vemos.",
+    "respuesta": "¡De nada, Iram! Con gusto estaré preparando tu propuesta y la infografía. Nos vemos pronto, cuídate.",
+    "slots": {
+      "nombre": "Iram",
+      "empresa": "evolucioni3",
+      "correo": "hiram060220@gmail.com",
+      "solucion_a_implementar": "mejorar la parte de ventas, automatizar procesos",
+      "OBJETIVO": "mejorar la parte de ventas, automatizar procesos | detalle_mail no están utilizando correo corporativo",
+      "detalle_mail": "no están utilizando correo corporativo",
+      "telefono": "449 277 92 68"
+    },
+    "campos_pendientes": [],
+    "campos_completos": true,
+    "campos_totales": 4,
+    "campos_llenos": 4,
+    "progreso": 1.0,
+    "terminar": true,
+    "resultado_bruto": [
+      "¡De nada, Iram! Con gusto estaré preparando tu propuesta y la infografía. Nos vemos pronto, cuídate.",
+      {
+        "nombre": "Iram",
+        "empresa": "evolucioni3",
+        "correo": "hiram060220@gmail.com",
+        "solucion_a_implementar": "mejorar la parte de ventas, automatizar procesos",
+        "OBJETIVO": "mejorar la parte de ventas, automatizar procesos | detalle_mail no están utilizando correo corporativo",
+        "detalle_mail": "no están utilizando correo corporativo",
+        "telefono": "449 277 92 68"
+      },
+      [],
+      true
+    ],
+    "es_despedida": true,
+    "cierre_forzado_por_keyword": false
+  }
+}

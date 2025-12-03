@@ -8,6 +8,10 @@ Flujo completo:
 3) Obtiene la URL pública de la infografía usando ngrok (core.infographic_link).
 4) Envía WhatsApp (TEXTO FIJO + IMAGEN) por Woztell Bot API.
 5) Envía la infografía por correo (adjunto PNG) usando SMTP Zoho.
+
+Se expone la función:
+    flujo_infografia_whatsapp_email(...)
+para que amain.py la use de forma SINCRONA al final de la conversación.
 """
 
 from __future__ import annotations
@@ -17,6 +21,7 @@ import json
 import smtplib
 import ssl
 from email.message import EmailMessage
+from typing import Any, Dict, Optional
 
 import requests
 from dotenv import load_dotenv
@@ -36,7 +41,7 @@ load_dotenv()
 WOZTELL_TOKEN = os.getenv("WOZTELL_TOKEN")
 WOZTELL_CHANNEL_ID = os.getenv("WOZTELL_CHANNEL_ID")
 # Teléfono de prueba (formato 52XXXXXXXXXX)
-TELEFONO_DESTINO = os.getenv("WOZTELL_TEST_PHONE", "5214495097519")
+TELEFONO_DESTINO_DEFAULT = os.getenv("WOZTELL_TEST_PHONE", "5214495097519")
 
 # -------------------------
 # Email / SMTP Zoho
@@ -48,9 +53,9 @@ SMTP_PASS = os.getenv("SMTP_PASS")
 SMTP_USE_TLS = os.getenv("SMTP_USE_TLS", "True").lower() == "true"
 SMTP_FROM_NAME = os.getenv("SMTP_FROM_NAME", "Evolución i3")
 EMAIL_FROM = os.getenv("EMAIL_FROM", SMTP_USER or "")
-EMAIL_DESTINO = os.getenv(
+EMAIL_DESTINO_DEFAULT = os.getenv(
     "EMAIL_TO_TEST",
-    "valadezgutierrezmaguadalupe@gmail.com"
+    "valadezgutierrezmaguadalupe@gmail.com",
 )
 
 # ====================================================
@@ -119,12 +124,19 @@ def enviar_whatsapp_imagen(imagen_url: str, telefono: str) -> None:
 # =========================
 # FUNCIÓN: Email con infografía adjunta
 # =========================
-def enviar_email_infografia(png_path: str) -> None:
+def enviar_email_infografia(png_path: str, email_to: Optional[str] = None) -> None:
     """
     Envía un correo con la infografía PNG adjunta.
-    Usa configuración SMTP definida en .env
+    Usa configuración SMTP definida en .env.
+    Si email_to es None, se usa EMAIL_DESTINO_DEFAULT.
     """
-    if not (SMTP_HOST and SMTP_PORT and SMTP_USER and SMTP_PASS and EMAIL_DESTINO):
+    destino = email_to or EMAIL_DESTINO_DEFAULT
+
+    if not destino:
+        print("⚠️ No hay EMAIL_DESTINO configurado ni email_to. No se envía correo.")
+        return
+
+    if not (SMTP_HOST and SMTP_PORT and SMTP_USER and SMTP_PASS):
         print("⚠️ Datos SMTP incompletos. No se envía correo.")
         return
 
@@ -134,7 +146,7 @@ def enviar_email_infografia(png_path: str) -> None:
 
     msg = EmailMessage()
     msg["From"] = from_header
-    msg["To"] = EMAIL_DESTINO
+    msg["To"] = destino
     msg["Subject"] = "Infografía Totem Evolución i3"
 
     msg.set_content(
@@ -157,7 +169,7 @@ def enviar_email_infografia(png_path: str) -> None:
     print("SMTP_PORT :", SMTP_PORT)
     print("SMTP_USER :", SMTP_USER)
     print("FROM      :", from_header)
-    print("TO        :", EMAIL_DESTINO)
+    print("TO        :", destino)
 
     context = ssl.create_default_context()
 
@@ -176,36 +188,46 @@ def enviar_email_infografia(png_path: str) -> None:
     print("✅ Email enviado correctamente.")
 
 
-# =========================
-# MAIN: flujo completo
-# =========================
-def main() -> None:
-    # 1) Datos de ejemplo del cliente (luego vendrán del Tótem)
-    datos_cliente = {
-        "nombre": "Visitante Zoholics",
-        "empresa": "Empresa Demo",
-        "objetivo": "Quiere profesionalizar su operación comercial y financiera.",
-        "problemas": "Falta de control, reportes tardíos y procesos manuales.",
-        "necesidades": "Automatizar ventas, facturación y análisis de resultados.",
-        # estas soluciones impactan semanas y costo en el prompt
-        "soluciones": ["CRM", "Books", "Analytics"],
-    }
+# =====================================================
+# FUNCIÓN ORQUESTADORA: para usarla desde amain.py
+# =====================================================
+def flujo_infografia_whatsapp_email(
+    datos_cliente: Dict[str, Any],
+    telefono: Optional[str] = None,
+    email: Optional[str] = None,
+    nombre_archivo: str = "infografia_totem",
+    enviar_whatsapp: bool = True,
+    enviar_email_flag: bool = True,
+) -> Dict[str, Any]:
+    """
+    Orquesta TODO el flujo:
+      1) Llama a OpenAI (generar_texto_infografia) para obtener bloques de texto.
+      2) Genera la infografía (PNG + PDF) con generar_infografia(...).
+      3) Construye URL pública con build_infografia_public_url().
+      4) Envía WhatsApp (TEXTO + IMAGEN) si enviar_whatsapp=True y hay teléfono.
+      5) Envía Email con PNG adjunto si enviar_email_flag=True y hay email.
 
-    # 2) Pedir a OpenAI el TEXTO de la infografía (JSON)
-    print(">>> Generando texto de infografía con OpenAI...")
+    Retorna un dict con info útil (paths y url) por si quieres loguearlo.
+    """
+    print(">>> [flujo_infografia_whatsapp_email] INICIO flujo con datos_cliente =", datos_cliente)
+
+    # 1) Texto para infografía vía OpenAI
     bloques = generar_texto_infografia(datos_cliente)
+    print(">>> [flujo_infografia_whatsapp_email] bloques generados =", bloques)
 
-    # 3) Adaptar JSON a los slots que espera infographic_engine
+    # 2) Adaptar JSON a los slots que espera infographic_engine
     slots = {
-        "titulo": "Diagnóstico inicial - Evolución IA3 Tótem",
+        "titulo": f"Diagnóstico inicial - {datos_cliente.get('empresa', 'Evolución IA3 Tótem')}",
         "objetivo": bloques.get("objetivo", ""),
         "alcance": "\n".join(f"- {item}" for item in bloques.get("alcance", [])),
         "beneficios": "\n".join(f"- {item}" for item in bloques.get("beneficios", [])),
         "inversion": bloques.get("inversion_tiempo", ""),
     }
 
-    # 4) Generar infografía (PNG + PDF)
-    rutas = generar_infografia(slots, nombre_archivo="infografia_totem")
+    print(">>> [flujo_infografia_whatsapp_email] slots para infographic_engine =", slots)
+
+    # 3) Generar infografía (PNG + PDF)
+    rutas = generar_infografia(slots, nombre_archivo=nombre_archivo)
     png_path = rutas["png"]
     pdf_path = rutas["pdf"]
 
@@ -213,21 +235,60 @@ def main() -> None:
     print("   PNG:", png_path)
     print("   PDF:", pdf_path)
 
-    # 5) URL pública de la infografía vía ngrok
+    # 4) URL pública de la infografía vía ngrok
     url_publica = build_infografia_public_url()
-    print("[MAIN] URL pública de la infografía:", url_publica)
+    print("[flujo_infografia_whatsapp_email] URL pública de la infografía:", url_publica)
 
-    # 6) Enviar WhatsApp (texto fijo + imagen)
-    try:
-        enviar_whatsapp_imagen(url_publica, TELEFONO_DESTINO)
-    except Exception as e:
-        print(f"⚠️ Error al enviar WhatsApp: {e!r}")
+    # 5) Enviar WhatsApp (texto fijo + imagen) si aplica
+    if enviar_whatsapp:
+        tel_final = telefono or TELEFONO_DESTINO_DEFAULT
+        if tel_final:
+            try:
+                enviar_whatsapp_imagen(url_publica, tel_final)
+            except Exception as e:
+                print(f"⚠️ Error al enviar WhatsApp dentro de flujo_infografia_whatsapp_email: {e!r}")
+        else:
+            print("⚠️ No hay teléfono disponible para enviar WhatsApp.")
 
-    # 7) Enviar correo con la infografía adjunta (opcional)
-    try:
-        enviar_email_infografia(png_path)
-    except Exception as e:
-        print(f"⚠️ Error al enviar Email: {e!r}")
+    # 6) Enviar correo con la infografía adjunta si aplica
+    if enviar_email_flag:
+        try:
+            enviar_email_infografia(png_path, email_to=email)
+        except Exception as e:
+            print(f"⚠️ Error al enviar Email dentro de flujo_infografia_whatsapp_email: {e!r}")
+
+    return {
+        "png_path": png_path,
+        "pdf_path": pdf_path,
+        "url_publica": url_publica,
+        "telefono_usado": telefono or TELEFONO_DESTINO_DEFAULT,
+        "email_usado": email or EMAIL_DESTINO_DEFAULT,
+    }
+
+
+# =========================
+# MAIN: prueba manual
+# =========================
+def main() -> None:
+    # 1) Datos de ejemplo del cliente (luego vendrán del Tótem)
+    datos_cliente = {
+        "nombre": "Visitante Zoholics",
+        "empresa": "Empresa Demo",
+        "OBJETIVO": "Quiere profesionalizar su operación comercial y financiera.",
+        "problemas": "Falta de control, reportes tardíos y procesos manuales.",
+        "necesidades": "Automatizar ventas, facturación y análisis de resultados.",
+        # estas soluciones impactan semanas y costo en el prompt
+        "soluciones": ["CRM", "Books", "Analytics"],
+    }
+
+    flujo_infografia_whatsapp_email(
+        datos_cliente,
+        telefono=None,           # usa el de .env por defecto
+        email=None,              # usa EMAIL_DESTINO_DEFAULT
+        nombre_archivo="infografia_totem",
+        enviar_whatsapp=True,
+        enviar_email_flag=True,
+    )
 
 
 if __name__ == "__main__":

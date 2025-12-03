@@ -912,6 +912,28 @@ def procesar_turno_dialogo(
         else:
             slots[k] = v
 
+    # 👇 Construir OBJETIVO dinámico a partir de solucion_a_implementar + todos los detalle_*
+    partes_objetivo: List[str] = []
+
+    # 1) Si hay solucion_a_implementar, va primero
+    sol_impl = slots.get("solucion_a_implementar")
+    if isinstance(sol_impl, str) and sol_impl.strip():
+        partes_objetivo.append(sol_impl.strip())
+
+    # 2) Agregamos todos los slots que empiecen con detalle_*
+    for key, value in slots.items():
+        if not key.startswith("detalle_"):
+            continue
+        if not isinstance(value, str) or not value.strip():
+            continue
+        # ejemplo: "detalle_zoho_crm manejan los prospectos uno a uno"
+        partes_objetivo.append(f"{key} {value.strip()}")
+
+    # 3) Si juntamos algo, generamos OBJETIVO
+    if partes_objetivo:
+        slots["OBJETIVO"] = " | ".join(partes_objetivo)
+
+    # Actualizamos en el estado (por si agregamos/actualizamos OBJETIVO)
     session_state["slots"] = slots
 
     # Recalculamos campos pendientes en base a CAMPOS_REQUERIDOS
