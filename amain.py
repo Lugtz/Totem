@@ -748,12 +748,12 @@ async def chat_turn(payload: ChatTurnRequest):
                 "_slots_raw": slots,
             }
 
-            telefono_cliente = "521"+(
+            telefono_cliente = "+521"+(
                 slots.get("telefono")
                 or slots.get("phone")
                 or slots.get("Phone")
                 or None
-            ).replace(' ', '')
+                ).replace('-', '').replace('_', '').replace(' ', '')            
             email_cliente = (
                 slots.get("correo")
                 or slots.get("email")

@@ -168,7 +168,7 @@ def _saludar_visitante() -> None:
     saludo = (
         "Hola, ¿cómo estás? "
         "Soy Nacho, el asistente virtual de Evolución i3. "
-        "Podemos conversar un momento y, si quieres, te ayudo a crear una propuesta para tu empresa."
+        "Podemos conversar un momento y, si quieres, te ayudo a crear una propuesta para tu empresa , me puedes brindar tu nombre porfavor."
     )
 
     # 🔊 Saludo por TTS (si TTS_ENABLED=1; si no, solo se loguea)
