@@ -1,29 +1,14 @@
+# -*- coding: utf-8 -*-
+# core/infographic_engine.py
+# Versión refinada visualmente, estilo "IA corporativa" con colores y layout controlado
+
 import os
 import random
-from PIL import Image, ImageDraw, ImageFont, ImageFilter
-
-# =======================
-# RUTAS UNIVERSALES
-# =======================
-
-# Carpeta donde está este archivo: core/
-CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
-
-# Carpeta de assets: core/infographic_assets
-BASE_PATH = os.path.join(CURRENT_DIR, "infographic_assets")
-
-# Subcarpetas dentro de infographic_assets
-LOGO_PATH = os.path.join(BASE_PATH, "logos", "logo ei3 original _ baja.png")
-ICON_PATH = os.path.join(BASE_PATH, "icons")
-AVATAR_DIR = os.path.join(BASE_PATH, "avatars")
-
-# Tamaño del canvas
-WIDTH, HEIGHT = 1536, 1024
-
-# Carpeta de salida para las infografías (en la raíz del proyecto)
-# Si quieres que salga en la carpeta "infografias" al lado de core/, haz:
-PROJECT_ROOT = os.path.dirname(CURRENT_DIR)
-OUTPUT_DIR = os.path.join(PROJECT_ROOT, "infografias")
+from PIL import Image, ImageDraw, ImageFont
+from pathlib import Path
+RELATIVE_PATH_PARTS = ["core", "infographic_assets"]
+# === Rutas base (usa tu ruta actual) ===
+BASE_PATH = Path.cwd().joinpath(*RELATIVE_PATH_PARTS)
 LOGO_PATH = os.path.join(BASE_PATH, "logos", "logo ei3 original _ baja.png")
 ICON_PATH = os.path.join(BASE_PATH, "icons")
 AVATAR_DIR = os.path.join(BASE_PATH, "avatars")
@@ -68,33 +53,86 @@ def draw_gradient(draw, top, bottom):
         draw.line([(0, y), (WIDTH, y)], fill=(r, g, b))
 
 
-def text_wrap(draw, text, font, max_width):
+def text_wrap(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.FreeTypeFont, max_width: int):
+    """Envuelve texto en líneas que quepan en max_width."""
+    text = (text or "").strip()
+    if not text:
+        return []
+
     words = text.split()
-    lines, line = [], ""
+    lines = []
+    line = ""
+
     for word in words:
-        test = line + word + " "
+        test = (line + " " + word).strip()
         if draw.textlength(test, font=font) <= max_width:
             line = test
         else:
-            lines.append(line.strip())
-            line = word + " "
-    lines.append(line.strip())
+            if line:
+                lines.append(line)
+            line = word
+
+    if line:
+        lines.append(line)
+
     return lines
 
 
-def draw_text(draw, text, position, font, fill, max_width):
-    x, y = position
-    for line in text_wrap(draw, text, font, max_width):
-        draw.text((x, y), line, font=font, fill=fill)
-        y += font.size + 6
+def draw_body_text_centered(
+    draw: ImageDraw.ImageDraw,
+    text: str,
+    x: int,
+    y: int,
+    font: ImageFont.FreeTypeFont,
+    fill,
+    max_width: int,
+    card_h: int,
+    max_lines: int = 5,
+):
+    """
+    Dibuja el texto del cuerpo dentro de la tarjeta:
+    - Envuelve por ancho.
+    - Limita a max_lines.
+    - Centrado verticalmente dentro de la tarjeta.
+    """
+    # Si viene lista (ej. bullets), la unimos en texto plano
+    if isinstance(text, list):
+        text = " • ".join(str(t) for t in text)
+
+    lines = text_wrap(draw, str(text), font, max_width)
+
+    if not lines:
+        return
+
+    # Si hay más líneas de las permitidas, recortamos y agregamos "…"
+    if len(lines) > max_lines:
+        lines = lines[:max_lines]
+        # Añadimos "…" al final de la última línea si no lo tiene
+        if not lines[-1].endswith("…"):
+            lines[-1] = (lines[-1][: max(0, len(lines[-1]) - 1)] + "…").strip()
+
+    line_height = font.size + 6
+    total_height = len(lines) * line_height
+
+    # Centrado vertical dentro de la tarjeta
+    start_y = y + (card_h - total_height) // 2
+
+    current_y = start_y
+    for line in lines:
+        draw.text((x, current_y), line, font=font, fill=fill)
+        current_y += line_height
 
 
 def draw_card(draw, img, x, y, title, body, icon_file, text_color):
     """Tarjetas visuales tipo 'glass'."""
-    card_w, card_h = 560, 260  # reducido para dejar espacio derecho
+    card_w, card_h = 560, 260  # altura fija para control de texto
     radius = 30
     fill_color = (255, 255, 255, 245)
-    draw.rounded_rectangle((x, y, x + card_w, y + card_h), radius=radius, fill=fill_color)
+    draw.rounded_rectangle(
+        (x, y, x + card_w, y + card_h),
+        radius=radius,
+        fill=fill_color,
+    )
 
     # Icono
     icon_path = os.path.join(ICON_PATH, icon_file)
@@ -102,9 +140,27 @@ def draw_card(draw, img, x, y, title, body, icon_file, text_color):
         icon = Image.open(icon_path).convert("RGBA").resize((64, 64))
         img.paste(icon, (x + 25, y + 25), icon)
 
-    # Textos
-    draw.text((x + 110, y + 30), title, font=get_font(30, bold=True), fill=text_color)
-    draw_text(draw, body, (x + 30, y + 110), font=get_font(26), fill=text_color, max_width=500)
+    # Título de la tarjeta
+    title_font = get_font(30, bold=True)
+    draw.text((x + 110, y + 30), title, font=title_font, fill=text_color)
+
+    # Texto del cuerpo centrado verticalmente
+    body_font = get_font(26)
+    body_x = x + 30
+    body_y = y + 90  # punto de referencia; luego se centra en función de card_h
+    max_width = 500
+
+    draw_body_text_centered(
+        draw=draw,
+        text=body,
+        x=body_x,
+        y=body_y,
+        font=body_font,
+        fill=text_color,
+        max_width=max_width,
+        card_h=card_h - 90,  # espacio útil bajo el título
+        max_lines=5,
+    )
 
 
 def draw_avatar(img):
@@ -142,6 +198,26 @@ def elegir_paleta():
     return random.choice(PALETAS)
 
 
+# 🔹 NUEVO: función para imprimir el PDF
+def imprimir_pdf(path_pdf: str):
+    """
+    Envía el PDF a la impresora por defecto de Windows usando os.startfile.
+    No cambia nada del flujo, solo manda a imprimir si el archivo existe.
+    """
+    if not path_pdf or not os.path.isfile(path_pdf):
+        print(f"⚠️ No se encontró el PDF para imprimir: {path_pdf}")
+        return
+
+    try:
+        if os.name == "nt":
+            os.startfile(path_pdf, "print")  # Windows
+            print(f"🖨 Enviando a impresión: {path_pdf}")
+        else:
+            print(f"⚠️ Impresión automática no implementada para este sistema: {os.name}")
+    except Exception as e:
+        print(f"❌ Error al intentar imprimir {path_pdf}: {e}")
+
+
 # ------------------------
 # Función principal
 # ------------------------
@@ -163,21 +239,53 @@ def generar_infografia(slots, nombre_archivo="infografia_totem"):
     bg_top, bg_bottom, text_color = elegir_paleta()
     draw_gradient(draw, bg_top, bg_bottom)
 
-    # Título
+    # Título (limpio, corto y sin chocar con el logo)
+    raw_title = str(slots.get("titulo", "[Sin título]") or "").strip()
+
+    # Quitar prefijo "Proyecto " si viene
+    lower = raw_title.lower()
+    if lower.startswith("proyecto "):
+        title_text = raw_title[9:].strip()
+    else:
+        title_text = raw_title
+
+    if not title_text:
+        title_text = "[Sin título]"
+
+    title_font = get_font(52, bold=True)
+    # Reservamos espacio para el logo (aprox 200 px a la derecha)
+    max_title_width = WIDTH - 100 - 200  # margen izq 100, margen/logo der ~200
+
+    # Si sigue siendo muy largo, recortamos elegante
+    if draw.textlength(title_text, font=title_font) > max_title_width:
+        original = title_text
+        while draw.textlength(title_text + "…", font=title_font) > max_title_width and len(
+            title_text
+        ) > 3:
+            if " " in title_text:
+                title_text = title_text.rsplit(" ", 1)[0]
+            else:
+                title_text = title_text[:-1]
+        if title_text != original:
+            title_text = title_text.rstrip(".") + "…"
+
     draw.text(
         (100, 60),
-        slots.get("titulo", "[Sin título]"),
-        font=get_font(52, bold=True),
-        fill=text_color,
-    )
-    draw.text(
-        (100, 130),
-        "Objetivo, alcance, beneficios e inversión",
-        font=get_font(24),
+        title_text,
+        font=title_font,
         fill=text_color,
     )
 
-    # Tarjetas
+    # Subtítulo fijo
+    subtitle_font = get_font(24)
+    draw.text(
+        (100, 130),
+        "Objetivo, alcance, beneficios e inversión",
+        font=subtitle_font,
+        fill=text_color,
+    )
+
+    # Tarjetas (cuerpo)
     bloques = [
         ("Objetivo", slots.get("objetivo", ""), "objetivo.png"),
         ("Alcance", slots.get("alcance", ""), "archivo.png"),
@@ -194,16 +302,17 @@ def generar_infografia(slots, nombre_archivo="infografia_totem"):
         draw_card(draw, img, x, y, title, body, icon, text_color)
 
     # Footer
+    footer_font = get_font(24)
     draw.text(
         (100, HEIGHT - 80),
         "Date la oportunidad, nosotros los resultados",
-        font=get_font(24),
+        font=footer_font,
         fill=text_color,
     )
     draw.text(
         (100, HEIGHT - 45),
         "www.evolucioni3.com",
-        font=get_font(24),
+        font=footer_font,
         fill=text_color,
     )
 
@@ -219,7 +328,12 @@ def generar_infografia(slots, nombre_archivo="infografia_totem"):
     print("   PNG:", path_png)
     print("   PDF:", path_pdf)
 
-    return {
+    result = {
         "png": os.path.abspath(path_png),
         "pdf": os.path.abspath(path_pdf),
     }
+
+    # 🔹 NUEVO: mandar a imprimir automáticamente el PDF
+    imprimir_pdf(result["pdf"])
+
+    return result

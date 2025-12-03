@@ -155,7 +155,7 @@ def _iniciar_conversacion_local(session_id: str) -> None:
 
     logger.info("[camera] Conversación por voz finalizada.")
     print("✅ Conversación por voz finalizada.\n")
-
+    time.sleep(30)
 
 def _saludar_visitante() -> None:
     """

@@ -1,0 +1,33 @@
+winget search Python
+winget install --id Python.Python.3.11 --source winget --override "InstallAllUsers=0 PrependPath=1"
+winget search Git
+winget install --id Git.Git --source winget
+winget install --id Ngrok.Ngrok --source winget
+winget install --id Microsoft.VisualStudioCode --source winget
+
+ngrok config add-authtoken 35dUMzLRpvcUZobovjl6C4plDyD_7xPMzMzGBMSETxZc8NJyf
+
+
+winget install --id=Microsoft.VCRedist.2015+.x64 -e
+
+
+
+cd Documents
+git clone --branch clean-runtime --single-branch https://github.com/Lugtz/Totem.git
+
+
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy RemoteSigned
+python -m venv .venv311
+py -3.11 -m venv .venv311
+.\.venv311\Scripts\Activate.ps1
+
+
+pip install fastapi "uvicorn[standard]" python-dotenv requests httpx websockets
+pip install openai pillow numpy elevenlabs
+pip install opencv-python
+pip install ultralytics
+pip install sounddevice pyaudio soundfile
+pip install panda3d panda3d-gltf
+
+cambiar el nombre del ui 
+uvicorn amain:app --host 127.0.0.1 --port 8000 --reload

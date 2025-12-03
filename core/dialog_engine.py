@@ -561,8 +561,10 @@ En cada turno recibirás un bloque "CONTEXTO_ZOHO_RELEVANTE" con:
      - "Soy Nacho, el asistente inteligente de Evolución i3."
    - Explica en una sola frase lo que puedes hacer:
      - "Puedo platicar contigo, resolver dudas y, si quieres, te ayudo a preparar una propuesta con una infografía para tu empresa."
-   - Luego haz una primera pregunta suave, por ejemplo:
-     - "¿En qué tipo de empresa trabajas?" o "¿Qué área llevas tú?"
+   - En el PRIMER turno, SIEMPRE pide directamente el NOMBRE de la persona, por ejemplo:
+     - "Para empezar, ¿cómo te llamas?"
+     - "¿Cuál es tu nombre?"
+   - Ya después podrás preguntar por la empresa, el rol, etc. en los siguientes turnos.
 
 2) DESCUBRIMIENTO
    - Mezcla preguntas de contexto con lo que la persona va diciendo.
@@ -589,6 +591,12 @@ En cada turno recibirás un bloque "CONTEXTO_ZOHO_RELEVANTE" con:
    - Cambia a una pregunta más general o sigue la conversación por otro lado.
    - Ejemplo:
      - "No te preocupes, con lo que ya me contaste también puedo ir armando algo."
+
+6) AÚN SI YA TENGO TODOS LOS DATOS
+   - La conversación NO se cierra automáticamente.
+   - La persona puede seguir preguntando sobre Zoho, sobre su empresa o de otros temas.
+   - También puede aclarar o corregir datos (nombre, correo, teléfono, empresa, etc.).
+   - Solo cierras la conversación si la persona claramente se despide.
 
 🌀 SI LA PERSONA SOLO PREGUNTA ALGO SUELTO / RANDOM
 - Si en el turno ACTUAL la persona solamente:
@@ -804,7 +812,7 @@ def _normalizar_correo(valor: Any) -> Any:
 
     # Normalizar a minúsculas
     correo = correo.lower()
-
+    correo = correo.replace("punto",".")
     # Si ya trae @, lo regresamos así
     if "@" in correo:
         return correo
@@ -889,6 +897,25 @@ def procesar_turno_dialogo(
         es_despedida = False
         return assistant_text, slots, campos_pendientes, campos_completos, es_despedida
 
+    # ✨ Detección de correcciones explícitas para datos ya dados
+    correcciones = [
+        "me llamo",
+        "mi nombre es",
+        "no es ese",
+        "corrige",
+        "mejor usa",
+        "te di mal",
+        "no ese",
+        "cámbialo",
+        "cambialo",
+        "no es correcto",
+        "no era ese correo",
+        "no era ese teléfono",
+        "no era ese telefono",
+    ]
+    if any(p in texto_usuario.lower() for p in correcciones):
+        session_state["fase"] = "correccion_datos"
+
     # Construimos mensajes para el modelo
     messages = _build_messages(session_state, texto_usuario)
     data = _llamar_modelo(messages)
@@ -959,14 +986,32 @@ def procesar_turno_dialogo(
     ):
         session_state["fase"] = "captura_datos"
     if campos_completos:
-        session_state["fase"] = "confirmacion_final"
+        # Ya tengo todo, pero mantengo la conversación abierta
+        session_state["fase"] = "confirmacion_final_pero_conversacion_abierta"
 
-    # Bandera de despedida que viene del modelo
+    # Bandera de despedida que viene del modelo (controlada por fase)
     es_despedida_raw = data.get("es_despedida_model", False)
-    if isinstance(es_despedida_raw, str):
-        es_despedida = es_despedida_raw.lower() in ("true", "1", "yes", "si", "sí")
+
+    if session_state.get("fase") == "confirmacion_final_pero_conversacion_abierta":
+        # En esta fase solo nos despedimos si el usuario claramente se despide
+        texto_l = texto_usuario.lower()
+        if any(x in texto_l for x in ["adios", "adiós", "gracias", "nos vemos", "hasta luego", "bye"]):
+            es_despedida = True
+        else:
+            es_despedida = False
     else:
-        es_despedida = bool(es_despedida_raw)
+        # Caso normal: respetamos la señal del modelo
+        if isinstance(es_despedida_raw, str):
+            es_despedida = es_despedida_raw.lower() in ("true", "1", "yes", "si", "sí")
+        else:
+            es_despedida = bool(es_despedida_raw)
+
+    # 🚀 REGLA DURA: en la presentación SIEMPRE pide el nombre
+    if fase_anterior == "bienvenida" and not slots.get("nombre"):
+        assistant_text = (
+            "Hola, soy Nacho, el asistente inteligente de Evolución i3. "
+            "Para empezar, ¿cómo te llamas?"
+        )
 
     # Guardamos historial solo con texto normal (sin JSON interno)
     session_state.setdefault("historial", []).append(

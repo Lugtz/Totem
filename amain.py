@@ -748,7 +748,7 @@ async def chat_turn(payload: ChatTurnRequest):
                 "_slots_raw": slots,
             }
 
-            telefono_cliente = "52"+(
+            telefono_cliente = "521"+(
                 slots.get("telefono")
                 or slots.get("phone")
                 or slots.get("Phone")
