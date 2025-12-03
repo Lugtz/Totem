@@ -781,26 +781,38 @@ def _llamar_modelo(messages: List[Dict[str, str]]) -> Dict[str, Any]:
 
 def _normalizar_correo(valor: Any) -> Any:
     """
-    Normaliza correos que vienen del ASR como 'usuarioarrobagmail.com'
-    para convertir 'arroba' en '@'.
+    Normaliza correos que vienen del ASR, por ejemplo:
+    - 'usuario arroba gmail.com'
+    - 'usuarioarrobagmail.com'
+    - con espacios antes/después
 
-    Si el valor no es string, se regresa tal cual.
+    Reglas:
+    - Si no es string, se regresa tal cual.
+    - Quita TODOS los espacios.
+    - Pasa todo a minúsculas.
+    - Reemplaza 'arroba' por '@' si no existía.
     """
     if not isinstance(valor, str):
         return valor
 
+    # Quitar espacios al inicio/fin
     correo = valor.strip()
 
-    # Si ya trae @, no tocamos nada
+    # Quitar TODOS los espacios intermedios (y otros espacios raros)
+    # 'usuario arroba gmail.com' -> 'usuarioarrobagmail.com'
+    correo = "".join(correo.split())
+
+    # Normalizar a minúsculas
+    correo = correo.lower()
+
+    # Si ya trae @, lo regresamos así
     if "@" in correo:
         return correo
 
-    # Reemplazamos variantes de 'arroba' por '@'
-    # Ej: 'hiram060220arrobagmail.com' -> 'hiram060220@gmail.com'
-    reemplazos = ["arroba", "ARROBA", "Arroba", "aRRoBa"]
-    for patron in reemplazos:
-        if patron in correo:
-            correo = correo.replace(patron, "@")
+    # Reemplazamos 'arroba' por '@'
+    # Ej: 'usuarioarrobagmail.com' -> 'usuario@gmail.com'
+    if "arroba" in correo:
+        correo = correo.replace("arroba", "@")
 
     return correo
 

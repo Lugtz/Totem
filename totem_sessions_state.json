@@ -1,16 +1,16 @@
 {
-  "3686f22f-dba4-4241-8473-8ec0fbdb0800": {
-    "session_id": "3686f22f-dba4-4241-8473-8ec0fbdb0800",
-    "texto_usuario": "Con eso estoy bien Nacho, muchas gracias, nos vemos.",
-    "respuesta": "¡De nada, Iram! Con gusto estaré preparando tu propuesta y la infografía. Nos vemos pronto, cuídate.",
+  "57bc122a-f2c0-47ed-8b43-802676a89804": {
+    "session_id": "57bc122a-f2c0-47ed-8b43-802676a89804",
+    "texto_usuario": "sólo estamos utilizando gmail y ya hazme el favor de mandarme mi... mi... ¿cómo se llama? mi infografía porfa",
+    "respuesta": "Claro, Hiram. Con toda la información que me diste, ya puedo preparar tu propuesta y la infografía personalizada. La voy a enviar a tu correo hiram060220@gmail.com y también la imprimiré aquí para ti. Uno de nuestros asesores se pondrá en contacto contigo pronto. ¡Gracias por tu tiempo!",
     "slots": {
-      "nombre": "Iram",
-      "empresa": "evolucioni3",
+      "nombre": "Pepe",
+      "empresa": "Jarra",
       "correo": "hiram060220@gmail.com",
-      "solucion_a_implementar": "mejorar la parte de ventas, automatizar procesos",
-      "OBJETIVO": "mejorar la parte de ventas, automatizar procesos | detalle_mail no están utilizando correo corporativo",
-      "detalle_mail": "no están utilizando correo corporativo",
-      "telefono": "449 277 92 68"
+      "telefono": "449 277 92 68",
+      "solucion_a_implementar": "CRM para automatizar procesos",
+      "OBJETIVO": "CRM para automatizar procesos | detalle_zoho_crm Antes manejaban prospectos de uno a uno y era muy tardado.",
+      "detalle_zoho_crm": "Antes manejaban prospectos de uno a uno y era muy tardado."
     },
     "campos_pendientes": [],
     "campos_completos": true,
@@ -19,15 +19,15 @@
     "progreso": 1.0,
     "terminar": true,
     "resultado_bruto": [
-      "¡De nada, Iram! Con gusto estaré preparando tu propuesta y la infografía. Nos vemos pronto, cuídate.",
+      "Claro, Hiram. Con toda la información que me diste, ya puedo preparar tu propuesta y la infografía personalizada. La voy a enviar a tu correo hiram060220@gmail.com y también la imprimiré aquí para ti. Uno de nuestros asesores se pondrá en contacto contigo pronto. ¡Gracias por tu tiempo!",
       {
-        "nombre": "Iram",
-        "empresa": "evolucioni3",
+        "nombre": "Pepe",
+        "empresa": "Jarra",
         "correo": "hiram060220@gmail.com",
-        "solucion_a_implementar": "mejorar la parte de ventas, automatizar procesos",
-        "OBJETIVO": "mejorar la parte de ventas, automatizar procesos | detalle_mail no están utilizando correo corporativo",
-        "detalle_mail": "no están utilizando correo corporativo",
-        "telefono": "449 277 92 68"
+        "telefono": "449 277 92 68",
+        "solucion_a_implementar": "CRM para automatizar procesos",
+        "OBJETIVO": "CRM para automatizar procesos | detalle_zoho_crm Antes manejaban prospectos de uno a uno y era muy tardado.",
+        "detalle_zoho_crm": "Antes manejaban prospectos de uno a uno y era muy tardado."
       },
       [],
       true

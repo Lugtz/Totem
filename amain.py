@@ -711,7 +711,7 @@ async def chat_turn(payload: ChatTurnRequest):
             # Flujo WhatsApp + Email + Infografía (si está disponible)
             # ------------------------------------------------------
            
-            nombre_cliente = (
+            nombre_cliente =  (
                 slots.get("nombre")
                 or slots.get("Name")
                 or "Visitante Totem"
@@ -748,12 +748,12 @@ async def chat_turn(payload: ChatTurnRequest):
                 "_slots_raw": slots,
             }
 
-            telefono_cliente = (
+            telefono_cliente = "52"+(
                 slots.get("telefono")
                 or slots.get("phone")
                 or slots.get("Phone")
                 or None
-            )
+            ).replace(' ', '')
             email_cliente = (
                 slots.get("correo")
                 or slots.get("email")
