@@ -24,7 +24,6 @@ NACHO_BASE_URL = os.getenv("NACHO_BASE_URL", "http://localhost:7000").rstrip("/"
 # PALABRAS CLAVE DE CIERRE RÁPIDO
 # ----------------------------------------------------------
 END_KEYWORDS = [
-    
     "gracias, nacho",
     "ya es todo",
     "ya termine",
@@ -70,6 +69,18 @@ except Exception as e:
     logger.warning(
         "amain: NO se pudo importar crear_lead_en_crm desde core.crm_client: %r",
         e,
+    )
+
+# ----------------------------------------------------------
+# Import opcional del flujo WhatsApp + Email + Infografía
+# ----------------------------------------------------------
+try:
+    from core.whatsapp_email_infografia import flujo_infografia_whatsapp_email  # type: ignore
+    logger.info("amain: flujo_infografia_whatsapp_email importado correctamente.")
+except Exception:
+    flujo_infografia_whatsapp_email = None  # type: ignore
+    logger.exception(
+        "amain: ERROR importando flujo_infografia_whatsapp_email desde core.whatsapp_email_infografia"
     )
 
 
@@ -180,16 +191,16 @@ def _mapear_slots_para_crm(slots: Dict[str, Any]) -> Dict[str, Any]:
     """
     Mapea los slots del Totem a los nombres esperados por core.crm_client.crear_lead_en_crm.
 
-    Resultado esperado (igual que en tu script de prueba directa):
+    Resultado esperado:
     {
         "Name": "...",
         "Company": "...",
         "Email": "...",
         "Phone": "...",
-        "OBJETIVO": "..."
+        "OBJETIVO": "..."   # tomado de solucion_a_implementar / objetivo / diagnostico
     }
     """
-    return {
+    payload = {
         "Name": (
             slots.get("nombre")
             or slots.get("Name")
@@ -211,11 +222,25 @@ def _mapear_slots_para_crm(slots: Dict[str, Any]) -> Dict[str, Any]:
             or slots.get("Phone")
         ),
         "OBJETIVO": (
-            slots.get("diagnostico")
+            slots.get("solucion_a_implementar")
             or slots.get("objetivo")
             or slots.get("OBJETIVO")
+            or slots.get("diagnostico")
         ),
     }
+
+    # Log para ver qué está pasando
+    logger.info(
+        "[_mapear_slots_para_crm] slots_raw=%r | payload_crm=%r",
+        slots,
+        payload,
+    )
+
+    # Print para verlo directo en consola
+    print(">>> [_mapear_slots_para_crm] slots_raw =", slots)
+    print(">>> [_mapear_slots_para_crm] payload_crm =", payload)
+
+    return payload
 
 
 def _normalizar_respuesta_dialog_engine(
@@ -405,7 +430,7 @@ async def _enviar_slots_al_ui(respuesta: dict) -> None:
         email = slots.get("correo") or slots.get("email") or ""
         nombre = slots.get("nombre") or slots.get("name") or ""
         empresa = slots.get("empresa") or slots.get("company") or ""
-        # 👉 Nuevo: teléfono para el panel CRM del UI
+        # 👉 Teléfono para el panel CRM del UI
         telefono = (
             slots.get("telefono")
             or slots.get("phone")
@@ -428,7 +453,7 @@ async def _enviar_slots_al_ui(respuesta: dict) -> None:
             "email": email,
             "name": nombre,
             "company": empresa,
-            "phone": telefono,   # 👈 se envía también al UI
+            "phone": telefono,
             "proposal": proposal,
         }
 
@@ -454,8 +479,8 @@ async def chat_turn(payload: ChatTurnRequest):
     - Regresa la respuesta en texto y banderas de control.
     - Si ya tenemos nombre y empresa, DISPARA LA PROPUESTA y la INFOGRAFÍA
       (una sola vez cada una por sesión), AUNQUE haya campos pendientes.
-    - Cuando la conversación YA ES UNA DESPEDIDA y los campos obligatorios
-      están completos, se manda el lead a Zoho CRM una sola vez.
+    - Cuando la conversación YA ES UNA DESPEDIDA y hay mínimos (nombre + empresa),
+      se manda el lead a Zoho CRM y se dispara también el flujo de Whats/Email.
     - EXTRA: si el usuario dice una PALABRA CLAVE de cierre rápido
       (ej. 'gracias nacho', 'ya es todo'), se fuerza el cierre:
          * es_despedida = True
@@ -591,25 +616,34 @@ async def chat_turn(payload: ChatTurnRequest):
                 session_id,
             )
 
-    # -------- Lead en Zoho CRM --------
+    # -------- Lead en Zoho CRM + flujo Whats/Email --------
     # CASO 1 (normal):
-    #   - es_despedida == True
-    #   - campos_completos == True
+    #   - es_despedida == True (Nacho marcó que la conversación terminó)
+    #   - ready_minimos == True (al menos nombre y empresa)
     # CASO 2 (CIERRE RÁPIDO):
     #   - cierre_forzado_por_keyword == True
     #
     # En ambos casos:
     #   - crear_lead_en_crm disponible
     #   - aún no se haya creado lead para esta sesión
-    crear_lead_condicion_normal = es_despedida and campos_completos
+    crear_lead_condicion_normal = es_despedida and ready_minimos
     crear_lead_condicion_forzada = cierre_forzado_por_keyword
+
+    logger.info(
+        "[%s] FLAGS FIN: es_despedida=%s | cierre_forzado=%s | campos_completos=%s | ready_minimos=%s",
+        session_id,
+        es_despedida,
+        cierre_forzado_por_keyword,
+        campos_completos,
+        ready_minimos,
+    )
 
     if (
         crear_lead_en_crm is not None
         and not meta["lead_creado"]
         and (crear_lead_condicion_normal or crear_lead_condicion_forzada)
     ):
-        meta["lead_creado"] = True
+        # 🔴 Un solo try para CRM + flujo Whats/Email
         try:
             payload_crm = _mapear_slots_para_crm(slots)
             logger.info(
@@ -617,12 +651,105 @@ async def chat_turn(payload: ChatTurnRequest):
                 session_id,
                 payload_crm,
             )
-            # 🔴 LLAMADA DIRECTA, SÍNCRONA (igual que tu script de prueba):
+
+            # Llamada síncrona al CRM (igual que tu script de prueba)
             crear_lead_en_crm(payload_crm)
+            meta["lead_creado"] = True
             logger.info("[%s] Lead creado en Zoho CRM correctamente.", session_id)
+
+            # ------------------------------------------------------
+            # Flujo WhatsApp + Email + Infografía (si está disponible)
+            # ------------------------------------------------------
+            if flujo_infografia_whatsapp_email is not None:
+                nombre_cliente = (
+                    slots.get("nombre")
+                    or slots.get("Name")
+                    or "Visitante Totem"
+                )
+                empresa_cliente = (
+                    slots.get("empresa")
+                    or slots.get("Company")
+                    or "Visitante Totem"
+                )
+                objetivo_cliente = (
+                    slots.get("solucion_a_implementar")
+                    or slots.get("objetivo")
+                    or slots.get("OBJETIVO")
+                    or slots.get("diagnostico")
+                    or ""
+                )
+
+                problemas = slots.get("problemas") or slots.get("retos") or ""
+                necesidades = slots.get("necesidades") or slots.get("necesidades_clave") or ""
+                soluciones = (
+                    slots.get("soluciones")
+                    or slots.get("productos")
+                    or slots.get("solucion")
+                    or []
+                )
+
+                datos_cliente: Dict[str, Any] = {
+                    "nombre": nombre_cliente,
+                    "empresa": empresa_cliente,
+                    "OBJETIVO": objetivo_cliente,
+                    "problemas": problemas,
+                    "necesidades": necesidades,
+                    "soluciones": soluciones,
+                    "_slots_raw": slots,
+                }
+
+                telefono_cliente = (
+                    slots.get("telefono")
+                    or slots.get("phone")
+                    or slots.get("Phone")
+                    or None
+                )
+                email_cliente = (
+                    slots.get("correo")
+                    or slots.get("email")
+                    or slots.get("Email")
+                    or None
+                )
+
+                nombre_archivo = f"infografia_{empresa_cliente}".replace(" ", "_")
+
+                logger.info(
+                    "[%s] Disparando flujo_infografia_whatsapp_email (SINCRONO) con telefono=%r, email=%r, nombre_archivo=%r",
+                    session_id,
+                    telefono_cliente,
+                    email_cliente,
+                    nombre_archivo,
+                )
+
+                # 👇 PRINT para verlo clarito en consola
+                print(
+                    f">>> [{session_id}] EJECUTANDO flujo_infografia_whatsapp_email PARA {nombre_cliente} / {empresa_cliente}"
+                )
+
+                flujo_infografia_whatsapp_email(
+                    datos_cliente,
+                    telefono_cliente,
+                    email_cliente,
+                    nombre_archivo,
+                    True,   # enviar_whatsapp
+                    True,   # enviar_email
+                )
+                logger.info(
+                    "[%s] flujo_infografia_whatsapp_email finalizó correctamente.",
+                    session_id,
+                )
+            else:
+                logger.warning(
+                    "[%s] flujo_infografia_whatsapp_email es None; NO se ejecutó flujo de WhatsApp/Email.",
+                    session_id,
+                )
+
         except Exception:
-            logger.exception("[%s] Error al crear lead en Zoho CRM.", session_id)
-    elif es_despedida and campos_completos and crear_lead_en_crm is None:
+            logger.exception(
+                "[%s] Error en creación de lead o en flujo WhatsApp/Email.",
+                session_id,
+            )
+    elif es_despedida and ready_minimos and crear_lead_en_crm is None:
         logger.warning(
             "[%s] crear_lead_en_crm es None; NO se creó lead en Zoho CRM.",
             session_id,
@@ -686,7 +813,10 @@ async def chat_turn(payload: ChatTurnRequest):
 
     # Opcional: limpiar meta cuando se termina conversación
     if terminar_flag:
-        logger.info("[%s] Conversación marcada como TERMINADA. Limpiando meta de sesión.", session_id)
+        logger.info(
+            "[%s] Conversación marcada como TERMINADA. Limpiando meta de sesión.",
+            session_id,
+        )
         SESIONES.pop(session_id, None)
 
     return respuesta

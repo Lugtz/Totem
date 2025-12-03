@@ -1,47 +1,65 @@
-# llenar_crm_test.py
-# Prueba rápida para llenar el panel CRM del Totem vía HTTP.
+# -*- coding: utf-8 -*-
+"""
+prueba.py
 
-import time
-import requests
+Script de prueba RÁPIDO para validar _mapear_slots_para_crm()
+sin levantar FastAPI ni tocar Zoho ni Woztell.
+"""
 
-BASE_URL = "http://127.0.0.1:7000/crm"
+from pprint import pprint
 
-ejemplos = [
-    {
-        "nombre": "Luis Pérez",
-        "empresa": "TKL Logistics",
-        "correo": "luis.perez@tkl.com",
-        "telefono": "555-123-4567",
-        "diagnostico": "Necesita visibilidad en tiempo real de embarques y alertas automáticas."
-    },
-    {
-        "nombre": "María Gómez",
-        "empresa": "Enmedio",
-        "correo": "maria.gomez@enmedio.com",
-        "telefono": "555-987-6543",
-        "diagnostico": "Proyecto CRM omnicanal con automatización de oportunidades y tableros ejecutivos."
-    },
-    {
-        "nombre": "Juan López",
+# Importamos desde amain.py (asegúrate de que amain.py está en esta misma carpeta)
+from amain import _mapear_slots_para_crm  # type: ignore
+
+
+def probar_caso(descripcion: str, slots: dict) -> None:
+    print("\n" + "=" * 80)
+    print(f"CASO: {descripcion}")
+    print("- Slots de entrada:")
+    pprint(slots)
+
+    payload = _mapear_slots_para_crm(slots)
+
+    print("\n-> Payload CRM generado:")
+    pprint(payload)
+    print("=" * 80 + "\n")
+
+
+def main() -> None:
+    # Caso 1: todos los campos “bonitos”
+    slots_1 = {
+        "nombre": "Irán",
+        "empresa": "TKL",
+        "correo": "hirm060220@gmail.com",
+        "telefono": "449 277 92 68",
+        "solucion_a_implementar": "implementar el CRM para manejar mejor los prospectos y automatizar procesos",
+    }
+
+    # Caso 2: sin teléfono, sin correo, solo objetivo
+    slots_2 = {
+        "nombre": "Lourdes",
         "empresa": "Evolución i3",
-        "correo": "juan.lopez@evolucioni3.com",
-        "telefono": "555-111-2233",
-        "diagnostico": "Demostración interna de Totem IA3 con generación de propuestas e infografías."
-    },
-]
+        "objetivo": "automatizar seguimiento de leads en Zoho CRM",
+    }
 
-def main():
-    print("⚙️  Enviando datos de prueba al panel CRM...")
-    for i, payload in enumerate(ejemplos, start=1):
-        try:
-            resp = requests.get(BASE_URL, params=payload, timeout=5)
-            print(f"\nCaso #{i}")
-            print("URL :", resp.url)
-            print("HTTP:", resp.status_code)
-            print("Body:", resp.text[:200])
-        except Exception as e:
-            print(f"❌ Error al conectar: {e}")
-        time.sleep(2.0)
+    # Caso 3: viene OBJETIVO y diagnostico, pero no solucion_a_implementar
+    slots_3 = {
+        "Name": "Visitante de Expo",
+        "Company": "Empresa Demo",
+        "Email": "demo@empresa.com",
+        "Phone": "555 555 5555",
+        "OBJETIVO": "mejorar la experiencia de recepción",
+        "diagnostico": "no cuentan con procesos claros de recepción ni registro",
+    }
+
+    # Caso 4: slots súper vacíos (debe poner Visitante Totem)
+    slots_4 = {}
+
+    probar_caso("1) Todos los campos completos (solucion_a_implementar)", slots_1)
+    probar_caso("2) Sin teléfono ni correo (solo objetivo)", slots_2)
+    probar_caso("3) Con OBJETIVO y diagnostico explícitos", slots_3)
+    probar_caso("4) Slots vacíos (fallback Visitante Totem)", slots_4)
+
 
 if __name__ == "__main__":
     main()

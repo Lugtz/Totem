@@ -533,6 +533,17 @@ En cada turno recibirás un bloque "CONTEXTO_ZOHO_RELEVANTE" con:
 - Haz UNA sola pregunta principal por turno. Máximo dos si van muy relacionadas.
 - Si ya tienes un dato (por ejemplo el nombre), no lo vuelvas a pedir a menos que haya confusión.
 
+🔄 CORRECCIÓN Y ACTUALIZACIÓN DE DATOS (MUY IMPORTANTE)
+- Si la persona dice que se equivocó en algún dato (nombre, correo, teléfono, empresa, etc.) y proporciona uno nuevo,
+  SIEMPRE toma el ÚLTIMO dato como el correcto.
+- En esos casos, incluye en "slots_detectados" el dato ACTUALIZADO, aunque ya lo hubieras llenado antes
+  en un turno anterior.
+- Si la persona pide eliminar o cancelar un dato (por ejemplo, "mejor no te doy mi teléfono"),
+  puedes mandar ese slot con valor vacío (""), null o similar, para que el sistema lo considere nuevamente como pendiente.
+- Resumen:
+  - Última información = la que manda.
+  - Si un slot viene vacío o null, se borra / limpia en el estado interno.
+
 🗣 ESTILO DE CONVERSACIÓN (MODO LLAMADA / STREAMING / MUCHA FLUIDEZ)
 - Piensa siempre que estás en una llamada MUY fluida entre dos personas.
 - Respondes en ESPAÑOL LATINO neutro, con expresiones naturales:
@@ -768,6 +779,32 @@ def _llamar_modelo(messages: List[Dict[str, str]]) -> Dict[str, Any]:
         }
 
 
+def _normalizar_correo(valor: Any) -> Any:
+    """
+    Normaliza correos que vienen del ASR como 'usuarioarrobagmail.com'
+    para convertir 'arroba' en '@'.
+
+    Si el valor no es string, se regresa tal cual.
+    """
+    if not isinstance(valor, str):
+        return valor
+
+    correo = valor.strip()
+
+    # Si ya trae @, no tocamos nada
+    if "@" in correo:
+        return correo
+
+    # Reemplazamos variantes de 'arroba' por '@'
+    # Ej: 'hiram060220arrobagmail.com' -> 'hiram060220@gmail.com'
+    reemplazos = ["arroba", "ARROBA", "Arroba", "aRRoBa"]
+    for patron in reemplazos:
+        if patron in correo:
+            correo = correo.replace(patron, "@")
+
+    return correo
+
+
 def procesar_turno_dialogo(
     session_id: str,
     texto_usuario: str,
@@ -859,9 +896,22 @@ def procesar_turno_dialogo(
     slots = session_state.get("slots", {})
     if not isinstance(slots, dict):
         slots = {}
+
+    # 🔄 Lógica de actualización/corrección de datos
+    # - Si llega un valor nuevo, sobreescribe.
+    # - Si llega vacío / None / [] / "__BORRAR__", elimina ese slot (lo vuelve pendiente).
+    # - Correo se normaliza si viene con 'arroba'.
     for k, v in slots_detectados.items():
-        if v not in (None, "", []):
+        # Normalizar correo si aplica
+        if k in ("correo", "email", "Email"):
+            v = _normalizar_correo(v)
+
+        if v in (None, "", [], "__BORRAR__"):
+            if k in slots:
+                del slots[k]
+        else:
             slots[k] = v
+
     session_state["slots"] = slots
 
     # Recalculamos campos pendientes en base a CAMPOS_REQUERIDOS
