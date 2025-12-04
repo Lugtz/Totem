@@ -46,7 +46,7 @@ logger = get_logger(__name__)
 API_BASE_URL = "http://127.0.0.1:8000"
 
 YOLO_MODEL_PATH = "yolov8n.pt"
-CAMERA_INDEX = 0
+CAMERA_INDEX = 1
 PERSON_CLASS_ID = 0           # ID de "person" en COCO
 CONFIDENCE_THRESHOLD = 0.5    # Umbral de confianza mínimo
 

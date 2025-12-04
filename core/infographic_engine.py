@@ -4,22 +4,35 @@
 
 import os
 import random
-from PIL import Image, ImageDraw, ImageFont
+import subprocess
+import time
 from pathlib import Path
+
+from PIL import Image, ImageDraw, ImageFont
+from reportlab.pdfgen import canvas
+from reportlab.lib.units import inch
+
 RELATIVE_PATH_PARTS = ["core", "infographic_assets"]
+
 # === Rutas base (usa tu ruta actual) ===
 BASE_PATH = Path.cwd().joinpath(*RELATIVE_PATH_PARTS)
 LOGO_PATH = os.path.join(BASE_PATH, "logos", "logo ei3 original _ baja.png")
 ICON_PATH = os.path.join(BASE_PATH, "icons")
 AVATAR_DIR = os.path.join(BASE_PATH, "avatars")
 
-# Tamaño del canvas
+# Tamaño del canvas (infografía base)
 WIDTH, HEIGHT = 1536, 1024
 
 # IMPORTANTE: carpeta pública para servir por HTTP/ngrok
 # Quedará como: <root>/infografias/infografia_totem.png
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 OUTPUT_DIR = os.path.join(PROJECT_ROOT, "infografias")
+
+# Ruta a SumatraPDF portable (ajusta si tu exe tiene otro nombre)
+SUMATRA_PATH = r"C:\Users\joses\OneDrive\Escritorio\SumatraPDF-3.5.2-64\SumatraPDF-3.5.2-64.exe"
+
+# Nombre EXACTO de la impresora en Windows
+PRINTER_NAME = r"HP Color LaserJet MFP M477fdw (3F853F)"
 
 # Paletas de color compatibles con el logo (fondo superior, fondo inferior, color texto)
 PALETAS = [
@@ -107,7 +120,6 @@ def draw_body_text_centered(
     # Si hay más líneas de las permitidas, recortamos y agregamos "…"
     if len(lines) > max_lines:
         lines = lines[:max_lines]
-        # Añadimos "…" al final de la última línea si no lo tiene
         if not lines[-1].endswith("…"):
             lines[-1] = (lines[-1][: max(0, len(lines[-1]) - 1)] + "…").strip()
 
@@ -147,7 +159,7 @@ def draw_card(draw, img, x, y, title, body, icon_file, text_color):
     # Texto del cuerpo centrado verticalmente
     body_font = get_font(26)
     body_x = x + 30
-    body_y = y + 90  # punto de referencia; luego se centra en función de card_h
+    body_y = y + 90
     max_width = 500
 
     draw_body_text_centered(
@@ -158,7 +170,7 @@ def draw_card(draw, img, x, y, title, body, icon_file, text_color):
         font=body_font,
         fill=text_color,
         max_width=max_width,
-        card_h=card_h - 90,  # espacio útil bajo el título
+        card_h=card_h - 90,
         max_lines=5,
     )
 
@@ -198,24 +210,122 @@ def elegir_paleta():
     return random.choice(PALETAS)
 
 
-# 🔹 NUEVO: función para imprimir el PDF
-def imprimir_pdf(path_pdf: str):
+# ========= 1) CONVERTIR PNG -> PDF MEDIA CARTA =========
+
+def png_a_pdf_mediacarta(path_png: str, path_pdf: str) -> None:
     """
-    Envía el PDF a la impresora por defecto de Windows usando os.startfile.
-    No cambia nada del flujo, solo manda a imprimir si el archivo existe.
+    Convierte un PNG a un PDF tamaño Media Carta (5.5 x 8.5 pulgadas)
+    en horizontal (landscape), ocupando toda la página.
     """
-    if not path_pdf or not os.path.isfile(path_pdf):
-        print(f"⚠️ No se encontró el PDF para imprimir: {path_pdf}")
+    if not os.path.isfile(path_png):
+        print(f"⚠️ La imagen NO existe: {path_png}")
         return
 
+    # Media carta (5.5 x 8.5) pero en horizontal: 8.5 de ancho x 5.5 de alto
+    width = 8.5 * inch
+    height = 5.5 * inch
+
+    c = canvas.Canvas(path_pdf, pagesize=(width, height))
+
+    # Dibujar la imagen ocupando toda la página
+    c.drawImage(path_png, 0, 0, width=width, height=height)
+
+    c.showPage()
+    c.save()
+
+    print(f"✅ PDF media carta generado: {path_pdf}")
+
+
+# ========= 2) LIMPIAR COLA DE IMPRESIÓN =========
+
+def limpiar_cola_impresora(printer_name: str) -> None:
+    """Borra TODOS los trabajos pendientes de la cola de la impresora indicada."""
+    print(f"🧹 Limpiando cola de impresión de: {printer_name!r}")
+    cmd = [
+        "powershell",
+        "-Command",
+        (
+            f"Get-PrintJob -PrinterName '{printer_name}' "
+            "| Remove-PrintJob -Confirm:$false"
+        ),
+    ]
     try:
-        if os.name == "nt":
-            os.startfile(path_pdf, "print")  # Windows
-            print(f"🖨 Enviando a impresión: {path_pdf}")
-        else:
-            print(f"⚠️ Impresión automática no implementada para este sistema: {os.name}")
+        subprocess.run(cmd, check=False)
+        print("✅ Cola de impresión limpiada (o ya estaba vacía).")
     except Exception as e:
-        print(f"❌ Error al intentar imprimir {path_pdf}: {e}")
+        print(f"⚠️ No se pudo limpiar la cola de impresión: {e}")
+
+
+# ========= 3) IMPRIMIR PDF CON SUMATRA (1 COPIA, AJUSTADO) =========
+
+def imprimir_pdf_una_copia(path_pdf: str) -> None:
+    """
+    Imprime un PDF usando SumatraPDF:
+    - 1 sola copia
+    - Escalado 'fit' a la hoja configurada en la impresora (media carta).
+    """
+    print("=== IMPRESIÓN PDF (Sumatra, 1 copia, fit) ===")
+    print(f"PDF           : {path_pdf}")
+    print(f"Sumatra exe   : {SUMATRA_PATH}")
+
+    if not os.path.isfile(path_pdf):
+        print(f"⚠️ El archivo PDF NO existe: {path_pdf}")
+        return
+
+    if os.name != "nt":
+        print(f"⚠️ Solo implementado para Windows (os.name={os.name})")
+        return
+
+    if not os.path.isfile(SUMATRA_PATH):
+        print(f"⚠️ SumatraPDF no encontrado en: {SUMATRA_PATH}")
+        return
+
+    # 1) Limpiar cola antes de imprimir
+    limpiar_cola_impresora(PRINTER_NAME)
+    time.sleep(1)
+
+    # 2) Mandar SOLO 1 copia, ajustada a la hoja
+    try:
+        print('\n--- SumatraPDF -print-to-default -print-settings "fit,1x" ---')
+        subprocess.run(
+            [
+                SUMATRA_PATH,
+                "-print-to-default",
+                "-exit-on-print",
+                "-print-settings",
+                "fit,1x",   # ajusta a la hoja + UNA sola copia
+                path_pdf,
+            ],
+            check=True,
+            shell=False,
+        )
+        print("🖨 (Sumatra) PDF enviado a la impresora (1 copia, media carta).")
+    except Exception as e:
+        print(f"❌ Error al imprimir con SumatraPDF: {e}")
+
+
+# ========= 4) FUNCIÓN PÚBLICA QUE USA GENERAR_INFOGRAFIA =========
+
+def imprimir_pdf(path_pdf: str) -> None:
+    """
+    Orquestador:
+    - A partir de path_pdf (ej: .../infografia_totem.pdf) deduce el PNG hermano.
+    - Genera un PDF en media carta (sufijo _MEDIACARTA.pdf).
+    - Imprime ese PDF con Sumatra (1 copia).
+    """
+    if not path_pdf:
+        print("⚠️ imprimir_pdf llamado sin ruta de PDF.")
+        return
+
+    base, ext = os.path.splitext(path_pdf)
+    path_png = base + ".png"
+    path_pdf_mediacarta = base + "_MEDIACARTA.pdf"
+
+    # 1) Convertir PNG -> PDF media carta
+    png_a_pdf_mediacarta(path_png, path_pdf_mediacarta)
+
+    # 2) Imprimir ese PDF media carta
+    imprimir_pdf_una_copia(path_pdf_mediacarta)
 
 
 # ------------------------
@@ -257,11 +367,12 @@ def generar_infografia(slots, nombre_archivo="infografia_totem"):
     max_title_width = WIDTH - 100 - 200  # margen izq 100, margen/logo der ~200
 
     # Si sigue siendo muy largo, recortamos elegante
-    if draw.textlength(title_text, font=title_font) > max_title_width:
+    if ImageDraw.Draw(Image.new("RGB", (1, 1))).textlength(title_text, font=title_font) > max_title_width:
         original = title_text
-        while draw.textlength(title_text + "…", font=title_font) > max_title_width and len(
-            title_text
-        ) > 3:
+        while (
+            ImageDraw.Draw(Image.new("RGB", (1, 1))).textlength(title_text + "…", font=title_font) > max_title_width
+            and len(title_text) > 3
+        ):
             if " " in title_text:
                 title_text = title_text.rsplit(" ", 1)[0]
             else:
@@ -333,7 +444,7 @@ def generar_infografia(slots, nombre_archivo="infografia_totem"):
         "pdf": os.path.abspath(path_pdf),
     }
 
-    # 🔹 NUEVO: mandar a imprimir automáticamente el PDF
+    # 🔹 Mandar a imprimir automáticamente el PDF en media carta
     imprimir_pdf(result["pdf"])
 
     return result
