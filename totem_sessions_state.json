@@ -1,0 +1,172 @@
+{
+  "cfc2c797-53c2-4cf0-80ef-ff106fb1093e": {
+    "session_id": "cfc2c797-53c2-4cf0-80ef-ff106fb1093e",
+    "texto_usuario": "Sale de muchas gracias, adiós.",
+    "respuesta": "¡De nada, Maluma! Cuídate mucho y aquí estaré si necesitas algo más. ¡Hasta luego!",
+    "slots": {
+      "nombre": "Maluma",
+      "empresa": "Red Bull",
+      "correo": "hiram060220@gmail.com",
+      "telefono": "449-277-9268",
+      "solucion_a_implementar": "integrar la facturación electrónica, el CRM y automatizar ciertos procesos",
+      "OBJETIVO": "integrar la facturación electrónica, el CRM y automatizar ciertos procesos | detalle_zoho_crm están manejando prospectos en una libreta chicharronera",
+      "detalle_zoho_crm": "están manejando prospectos en una libreta chicharronera"
+    },
+    "campos_pendientes": [],
+    "campos_completos": true,
+    "campos_totales": 4,
+    "campos_llenos": 4,
+    "progreso": 1.0,
+    "terminar": true,
+    "resultado_bruto": [
+      "¡De nada, Maluma! Cuídate mucho y aquí estaré si necesitas algo más. ¡Hasta luego!",
+      {
+        "nombre": "Maluma",
+        "empresa": "Red Bull",
+        "correo": "hiram060220@gmail.com",
+        "telefono": "449-277-9268",
+        "solucion_a_implementar": "integrar la facturación electrónica, el CRM y automatizar ciertos procesos",
+        "OBJETIVO": "integrar la facturación electrónica, el CRM y automatizar ciertos procesos | detalle_zoho_crm están manejando prospectos en una libreta chicharronera",
+        "detalle_zoho_crm": "están manejando prospectos en una libreta chicharronera"
+      },
+      [],
+      true
+    ],
+    "es_despedida": true,
+    "cierre_forzado_por_keyword": false
+  },
+  "6d878b31-9de7-4e89-a8a2-13833d19e984": {
+    "session_id": "6d878b31-9de7-4e89-a8a2-13833d19e984",
+    "texto_usuario": "Pues no estamos manejando nada mi loco, osea, lo estamos haciendo en un cuadernito acá bien pinchorriento Y pues está bien XD mi pa",
+    "respuesta": "¡Entiendo! Manejar todo en un cuadernito puede ser un poco complicado. Con lo que me cuentas, definitivamente un CRM podría ayudarles a organizar mejor sus prospectos y oportunidades. ¿Te gustaría que profundizáramos en cómo Zoho CRM puede facilitar eso?",
+    "slots": {
+      "nombre": "Iram",
+      "empresa": "Lost Mary",
+      "telefono": "449 277 92 68",
+      "correo": "iram060220@gmail.com",
+      "detalle_zoho_crm": "No están manejando nada, lo hacen en un cuadernito.",
+      "OBJETIVO": "detalle_zoho_crm No están manejando nada, lo hacen en un cuadernito."
+    },
+    "campos_pendientes": [],
+    "campos_completos": true,
+    "campos_totales": 4,
+    "campos_llenos": 4,
+    "progreso": 1.0,
+    "terminar": false,
+    "resultado_bruto": [
+      "¡Entiendo! Manejar todo en un cuadernito puede ser un poco complicado. Con lo que me cuentas, definitivamente un CRM podría ayudarles a organizar mejor sus prospectos y oportunidades. ¿Te gustaría que profundizáramos en cómo Zoho CRM puede facilitar eso?",
+      {
+        "nombre": "Iram",
+        "empresa": "Lost Mary",
+        "telefono": "449 277 92 68",
+        "correo": "iram060220@gmail.com",
+        "detalle_zoho_crm": "No están manejando nada, lo hacen en un cuadernito.",
+        "OBJETIVO": "detalle_zoho_crm No están manejando nada, lo hacen en un cuadernito."
+      },
+      [],
+      true
+    ],
+    "es_despedida": false,
+    "cierre_forzado_por_keyword": false
+  },
+  "a59eaa5b-72ef-42bc-85a1-55f38bee1ac6": {
+    "session_id": "a59eaa5b-72ef-42bc-85a1-55f38bee1ac6",
+    "texto_usuario": "mándamelo por mi correo por favor y ya sería todo muchas gracias adiós",
+    "respuesta": "Perfecto, Iram. Te enviaré la propuesta y la infografía a tu correo. ¡Muchas gracias a ti! Si necesitas algo más en el futuro, aquí estaré. ¡Hasta luego!",
+    "slots": {
+      "nombre": "Iram",
+      "empresa": "Antonella",
+      "correo": "hiram060220@gmail.com",
+      "telefono": "449-277-9268",
+      "solucion_a_implementar": "implementación de facturación electrónica, implementación de CRM y la implementación de automatización de procesos",
+      "OBJETIVO": "implementación de facturación electrónica, implementación de CRM y la implementación de automatización de procesos"
+    },
+    "campos_pendientes": [],
+    "campos_completos": true,
+    "campos_totales": 4,
+    "campos_llenos": 4,
+    "progreso": 1.0,
+    "terminar": true,
+    "resultado_bruto": [
+      "Perfecto, Iram. Te enviaré la propuesta y la infografía a tu correo. ¡Muchas gracias a ti! Si necesitas algo más en el futuro, aquí estaré. ¡Hasta luego!",
+      {
+        "nombre": "Iram",
+        "empresa": "Antonella",
+        "correo": "hiram060220@gmail.com",
+        "telefono": "449-277-9268",
+        "solucion_a_implementar": "implementación de facturación electrónica, implementación de CRM y la implementación de automatización de procesos",
+        "OBJETIVO": "implementación de facturación electrónica, implementación de CRM y la implementación de automatización de procesos"
+      },
+      [],
+      true
+    ],
+    "es_despedida": true,
+    "cierre_forzado_por_keyword": false
+  },
+  "1f6f841b-fe3a-4ce6-a645-d3a44be5f8b8": {
+    "session_id": "1f6f841b-fe3a-4ce6-a645-d3a44be5f8b8",
+    "texto_usuario": "hay con eso mi nacho muchas gracias y hasta luego",
+    "respuesta": "¡De nada, Nacho! Me alegra haber podido ayudarte. Si necesitas algo más en el futuro, no dudes en regresar. ¡Hasta luego!",
+    "slots": {
+      "nombre": "Nacho",
+      "empresa": "Glovo",
+      "correo": "iram@gmail.com",
+      "telefono": "449 277 92 68",
+      "solucion_a_implementar": "CRM",
+      "OBJETIVO": "CRM | detalle_zoho_crm haciéndolo en un cuadernito y no tienen correo ni nada.",
+      "detalle_zoho_crm": "haciéndolo en un cuadernito y no tienen correo ni nada."
+    },
+    "campos_pendientes": [],
+    "campos_completos": true,
+    "campos_totales": 4,
+    "campos_llenos": 4,
+    "progreso": 1.0,
+    "terminar": true,
+    "resultado_bruto": [
+      "¡De nada, Nacho! Me alegra haber podido ayudarte. Si necesitas algo más en el futuro, no dudes en regresar. ¡Hasta luego!",
+      {
+        "nombre": "Nacho",
+        "empresa": "Glovo",
+        "correo": "iram@gmail.com",
+        "telefono": "449 277 92 68",
+        "solucion_a_implementar": "CRM",
+        "OBJETIVO": "CRM | detalle_zoho_crm haciéndolo en un cuadernito y no tienen correo ni nada.",
+        "detalle_zoho_crm": "haciéndolo en un cuadernito y no tienen correo ni nada."
+      },
+      [],
+      true
+    ],
+    "es_despedida": true,
+    "cierre_forzado_por_keyword": false
+  },
+  "419deffe-e519-41e6-97e3-b949f46c5e35": {
+    "session_id": "419deffe-e519-41e6-97e3-b949f46c5e35",
+    "texto_usuario": "y nos vemos en el próxima.",
+    "respuesta": "Hola, soy Nacho, el asistente inteligente de Evolución i3. Para empezar, ¿cómo te llamas?",
+    "slots": {},
+    "campos_pendientes": [
+      "nombre",
+      "empresa",
+      "correo",
+      "telefono"
+    ],
+    "campos_completos": false,
+    "campos_totales": 4,
+    "campos_llenos": 0,
+    "progreso": 0.0,
+    "terminar": true,
+    "resultado_bruto": [
+      "Hola, soy Nacho, el asistente inteligente de Evolución i3. Para empezar, ¿cómo te llamas?",
+      {},
+      [
+        "nombre",
+        "empresa",
+        "correo",
+        "telefono"
+      ],
+      false
+    ],
+    "es_despedida": true,
+    "cierre_forzado_por_keyword": false
+  }
+}

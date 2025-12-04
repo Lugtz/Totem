@@ -1,50 +1,48 @@
-"""
-test_infografia_flujo.py
- 
-Prueba el FLUJO COMPLETO:
-1) Genera texto de infografía con OpenAI.
-2) Genera PNG+PDF.
-3) Saca URL pública (ngrok o lo que uses).
-4) Envía WhatsApp (si enviar_whatsapp=True).
-5) Envía Email (si enviar_email_flag=True).
-"""
- 
-from __future__ import annotations
- 
-from typing import Any, Dict
- 
-from core.whatsapp_email_infografia import flujo_infografia_whatsapp_email
- 
- 
-def main() -> None:
-    # Datos de prueba similares a los que mandará amain
-    datos_cliente: Dict[str, Any] = {
-        "nombre": "Visitante Zoholics Test",
-        "empresa": "Empresa Demo Test",
-        "OBJETIVO": "Quiere profesionalizar la operación comercial y financiera.",
+import requests
+import json # Es buena práctica importar 'json' aunque requests lo maneja internamente
 
+# -----------------------------
+# CONFIGURA ESTOS DATOS
+# -----------------------------
+# Reemplaza con tu token real
+TOKEN = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhdWQiOiJBUEkiLCJhcHAiOiI2MjE2NmQ1ZGY1MzY3MjIyMWU2ZTM1MjEiLCJhY2wiOlsiYXBpOmFkbWluIiwiY2hhbm5lbDpjcmVhdGVDaGFubmVsIiwiYWNjb3VudDp1cGRhdGUiLCJhY3Rpb246Y3JlYXRlIiwiYWN0aW9uOmRlbGV0ZSIsImFjdGlvbjp1cGRhdGUiLCJhZ2VuZGE6Y3JlYXRlIiwiYWdlbmRhOmRlbGV0ZSIsImFnZW5kYTpyZWFkIiwiYWdlbmRhOnVwZGF0ZSIsImFwcDpsaW5rUGFydG5lciIsImFwcDpsaXN0TWFuYWdtZW50UmVxdWVzdCIsImFwcEluZm86Z2V0IiwiYXBwSW50ZWdyYXRpb246Y3JlYXRlIiwiYXBwSW50ZWdyYXRpb246ZGVsZXRlIiwiYXBwSW50ZWdyYXRpb246Z2V0IiwiYXBwSW50ZWdyYXRpb246bGlzdCIsImFwcEludGVncmF0aW9uOnVwZGF0ZSIsImFwcFNldHRpbmdzOmdldCIsImFwcFNldHRpbmdzOnVwZGF0ZSIsImFzc2lnbm1lbnQ6bGlzdCIsImF0dGFjaG1lbnRJZDpjcmVhdGUiLCJhdHRhY2htZW50SWQ6bGlzdCIsImF1ZGllbmNlOmNyZWF0ZSIsImF1ZGllbmNlOmRlbGV0ZSIsImF1ZGllbmNlOmdldCIsImF1ZGllbmNlOmxpc3QiLCJhdWRpZW5jZTpyZWFkIiwiYXVkaWVuY2U6dXBkYXRlIiwiYXVkaXRUcmFpbDpsaXN0IiwiYm90OnJlZGlyZWN0TWVtYmVyVG9Ob2RlIiwiYm90OmFkbWluIiwiYmlsbGluZzp1cGRhdGVTdWJzY3JpcHRpb24iLCJiaWxsaW5nOmxpc3RJbnZvaWNlcyIsImJpbGxpbmc6Z2V0U3Vic2NyaXB0aW9uIiwiYmlsbGluZzpkZWxldGVTdWJzY3JpcHRpb24iLCJiaWxsaW5nOmNyZWF0ZVN1YnNjcmlwdGlvbiIsImJhY2tncm91bmRUYXNrOmxpc3QiLCJiYWNrZ3JvdW5kVGFzazpnZXQiLCJib3RidWlsZGVyOnJlYWQiLCJib3RidWlsZGVyOm1hbmFnZSIsImJvdDpzZW5kUmVzcG9uc2VzIiwiY2hhbm5lbDpjcmVhdGVFbnZpcm9ubWVudCIsImNoYW5uZWw6ZGVsZXRlQ2hhbm5lbCIsImNoYW5uZWw6ZGVsZXRlRW52aXJvbm1lbnQiLCJjaGFubmVsOmdldEF2YWlsYWJpbGl0aWVzIiwiY2hhbm5lbDpnZXRCYXNpY0luZm8iLCJjaGFubmVsOmdldEJyb2FkY2FzdEdyb3VwU2V0dGluZ3MiLCJjaGFubmVsOmdldERldGFpbHMiLCJjaGFubmVsOmdldEVudmlyb25tZW50SW5mbyIsImNoYW5uZWw6Z2V0TGl2ZUNoYXRTZXR0aW5ncyIsImNoYW5uZWw6Z2V0UGxhdGZvcm1JbmZvIiwiY2hhbm5lbDpnZXRQbGF0Zm9ybVNldHRpbmdzIiwiY2hhbm5lbDpnZXRUcmVlU2V0dGluZ3MiLCJjaGFubmVsOmxpc3QiLCJjaGFubmVsOnVwZGF0ZUF2YWlsYWJpbGl0aWVzIiwiY2hhdDpleHBvcnQiLCJjaGFubmVsOnVwZGF0ZVRyZWVTZXR0aW5ncyIsImNoYW5uZWw6dXBkYXRlUGxhdGZvcm1TZXR0aW5ncyIsImNoYW5uZWw6dXBkYXRlUGxhdGZvcm1JbmZvIiwiY2hhbm5lbDp1cGRhdGVMaXZlQ2hhdFNldHRpbmdzIiwiY2hhbm5lbDp1cGRhdGVFbnZpcm9ubWVudEluZm8iLCJjaGFubmVsOnVwZGF0ZURldGFpbCIsImNoYW5uZWw6dXBkYXRlQnJvYWRjYXN0R3JvdXBTZXR0aW5ncyIsImNoYW5uZWw6dXBkYXRlQmFzaWNJbmZvIiwiY29uZGl0aW9uOmNyZWF0ZSIsImNvbmRpdGlvbjpkZWxldGUiLCJjb25kaXRpb246dXBkYXRlIiwiY29udmVyc2F0aW9uOnJlYWQiLCJkYXNoYm9hcmQ6ZXhwb3J0QW5hbHl0aWNzIiwiZGFzaGJvYXJkOmV4cG9ydFVzZXJzIiwiZGFzaGJvYXJkOmxpc3RBZ2VudHMiLCJkYXNoYm9hcmQ6bGlzdEFuYWx5dGljcyIsImRhc2hib2FyZDpsaXN0QXNzaWdubWVudCIsImRhdGFTb3VyY2U6ZGVsZXRlRG9jIiwiZGF0YVNvdXJjZTpkZWxldGVEYXRhc291cmNlIiwiZGF0YVNvdXJjZTpjcmVhdGVEb2MiLCJkYXRhU291cmNlOmNyZWF0ZURhdGFzb3VyY2UiLCJkYXNoYm9hcmQ6bGlzdFdoYXRzYXBwQW5hbHl0aWNzIiwiZGFzaGJvYXJkOmxpc3RVc2VycyIsImRhc2hib2FyZDpsaXN0VGlja2V0aW5nIiwiZGFzaGJvYXJkOmxpc3RObHBBbmFseXRpY3MiLCJkYXNoYm9hcmQ6bGlzdENvbW1lbnRSZXBseSIsImRhdGFTb3VyY2U6ZXhwb3J0RGF0YXNvdXJjZSIsImRhdGFTb3VyY2U6Z2V0RG9jIiwiZGF0YVNvdXJjZTppbXBvcnREYXRhc291cmNlIiwiZGF0YVNvdXJjZTpsaXN0RGF0YXNvdXJjZXMiLCJkYXRhU291cmNlOmxpc3REb2NzIiwiZGF0YVNvdXJjZTp1cGRhdGVEYXRhc291cmNlIiwiZGF0YVNvdXJjZTp1cGRhdGVEb2MiLCJmaWxlOmFkbWluIiwiZmlsZTpnZXQiLCJtZWRpYUxpYnJhcnk6ZGVsZXRlIiwibWVkaWFMaWJyYXJ5OmNyZWF0ZSIsImxvZzpsaXN0IiwiaW50ZWdyYXRpb246dXBkYXRlIiwiaW50ZWdyYXRpb246bGlzdCIsImludGVncmF0aW9uOmdldCIsImludGVncmF0aW9uOmNyZWF0ZSIsImZpbGU6d2FHZXQiLCJtZWRpYUxpYnJhcnk6Z2V0IiwibWVkaWFMaWJyYXJ5Omxpc3QiLCJtZWRpYUxpYnJhcnk6dXBkYXRlIiwibWVtYmVyOlRvZ2dsZUxpdmVDaGF0IiwibWVtYmVyOmFkbWluIiwibWVtYmVyOmNyZWF0ZSIsIm1lbWJlcjpkZWxldGUiLCJtZW1iZXI6ZXhwb3J0IiwibWVtYmVyOmdldENvbnZlcnNhdGlvbiIsIm1lbWJlcjpnZXREZXRhaWxzIiwibWVtYmVyOmltcG9ydCIsIm1lbWJlcjpsaXN0IiwibWVtYmVyVGFnczpnZXQiLCJtZW1iZXJUYWdzOmRlbGV0ZSIsIm1lbWJlclRhZ3M6Y3JlYXRlIiwibWVtYmVyOndyaXRlIiwibWVtYmVyOnVwZGF0ZURldGFpbHMiLCJtZW1iZXI6cmVhZCIsInByaW9yaXR5R3JvdXA6bGlzdCIsInByaW9yaXR5R3JvdXA6Z2V0IiwicHJpb3JpdHlHcm91cDpkZWxldGUiLCJwcmlvcml0eUdyb3VwOmNyZWF0ZSIsIm5vZGU6dXBkYXRlIiwibm9kZTpkZWxldGUiLCJub2RlOmNyZWF0ZSIsIm1lbWJlcnM6bWFuYWdlVGFncyIsInByaW9yaXR5R3JvdXA6dXBkYXRlIiwicHVzaDpjcmVhdGUiLCJwdXNoOmRlbGV0ZSIsInB1c2g6Z2V0IiwicHVzaDpsaXN0IiwicHVzaDp1cGRhdGUiLCJyZXNwb25zZTpjcmVhdGUiLCJyZXNwb25zZTpkZWxldGUiLCJ0cmVlOmRlbGV0ZSIsInRlYW1NZW1iZXI6dXBkYXRlIiwidGVhbU1lbWJlcjpsaXN0IiwidGVhbU1lbWJlcjpkZWxldGUiLCJ0ZWFtTWVtYmVyOmNyZWF0ZSIsInJvbGU6bGlzdCIsInJlc3BvbnNlOnVwZGF0ZSIsIndoYXRzYXBwTWVzc2FnZVRlbXBsYXRlczpsaXN0Iiwid2hhdHNhcHBNZXNzYWdlVGVtcGxhdGVzOmdldCIsIndoYXRzYXBwTWVzc2FnZVRlbXBsYXRlczpkZWxldGUiLCJ3aGF0c2FwcE1lc3NhZ2VUZW1wbGF0ZXM6Y3JlYXRlIiwid2hhdHNhcHA6Z2V0RmlsZSIsInRyaWdnZXI6dXBkYXRlIiwidHJpZ2dlcjpkZWxldGUiLCJ0cmVlOnJlYWQiLCJ0cmVlOnVwZGF0ZUJhc2ljSW5mbyIsInRyZWU6dXBkYXRlTm9kZXMiLCJ0cmVlOnVwZGF0ZVRyZWVTZXR0aW5nIiwidHJlZTpleHBvcnQiLCJ0cmVlOmdldEJhc2ljSW5mbyIsInRyZWU6Z2V0Tm9kZXMiLCJ0cmVlOmdldFRyZWVTZXR0aW5nIiwidHJlZTppbXBvcnQiLCJ0cmVlOmxpc3QiLCJ0cmlnZ2VyOmNyZWF0ZSJdLCJqdGkiOiIyY2U4MGUyZS00YWIyLTU2OTgtOTExMi1hMDc1ZDAzNzBmMDUiLCJpc3MiOiI2MjE2NmQ0ZDQzZmVmZDgwODdiYzY4NGUiLCJpYXQiOjE3NjQ4MDc4NzA2ODd9.SdWOjmKE2QlBgl50RHxmkp_M5ItREduG7JyJXkeBX34"
+# DEBE ser el ID NUMÉRICO de tu número de teléfono registrado en Meta.
+# Ejemplo: "1098765432109876"
+PHONE_NUMBER_ID = "62210d64646d5f3311936a08" 
+
+# El número del destinatario. DEBE ir en formato E.164, SIN el "+" inicial.
+# Ejemplo para México: "5214491234567"
+NUMERO_DESTINO = "524492779268" 
+
+MENSAJE = "Hola wey 😎 mensaje automático desde Python con la API oficial!"
+
+# -----------------------------
+# ENVÍO DEL MENSAJE
+# -----------------------------
+# La URL de Meta para enviar mensajes a través de la versión 20.0
+url = f"https://graph.facebook.com/v20.0/{PHONE_NUMBER_ID}/messages"
+
+headers = {
+    # El Token de Acceso
+    "Authorization": f"Bearer {TOKEN}",
+    # Especifica que el cuerpo de la solicitud es JSON
+    "Content-Type": "application/json"
+}
+
+payload = {
+    # Indica que es un mensaje de WhatsApp
+    "messaging_product": "whatsapp",
+    # El destinatario (formato E.164)
+    "to": NUMERO_DESTINO,
+    # El tipo de contenido (texto simple)
+    "type": "text",
+    "text": {
+        "body": MENSAJE
     }
- 
-    # Teléfono y email de prueba
-    telefono_prueba = None  # usa el de .env (WOZTELL_TEST_PHONE)
-    email_prueba = None     # usa EMAIL_TO_TEST del .env
- 
-    print(">>> INICIANDO TEST flujo_infografia_whatsapp_email")
-    print("datos_cliente =", datos_cliente)
- 
-    resultado = flujo_infografia_whatsapp_email(
-        datos_cliente,
-        telefono=telefono_prueba,
-        email=email_prueba,
-        nombre_archivo="infografia_flujo_test",
-        enviar_whatsapp=True,      # pon False si solo quieres probar email
-        enviar_email_flag=True,    # pon False si solo quieres probar Whats
-    )
- 
-    print("\n>>> RESULTADO DEL FLUJO:")
-    for k, v in resultado.items():
-        print(f"  {k}: {v}")
- 
- 
-if __name__ == "__main__":
-    main()
+}
+
+response = requests.post(url, headers=headers, json=payload)
+
+print("STATUS:", response.status_code)
+# Imprimir la respuesta en un formato más legible
+print("RESPUESTA:\n", json.dumps(response.json(), indent=4))

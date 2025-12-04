@@ -519,6 +519,29 @@ async def _enviar_slots_al_ui(respuesta: dict) -> None:
     except Exception as e:
         logger.warning("[UI] No se pudo notificar CRM al visor: %s", e)
 
+async def _limpiar_panel_crm() -> None:
+    """
+    Envía al visor un estado vacío para limpiar el panel CRM
+    (nombre, empresa, correo, teléfono y texto de propuesta).
+    """
+    try:
+        respuesta_vacia = {
+            "slots": {
+                "nombre": "",
+                "empresa": "",
+                "correo": "",
+                "email": "",
+                "telefono": "",
+                "phone": "",
+            },
+            "campos_pendientes": [],
+            "progreso": 0.0,
+        }
+
+        await _enviar_slots_al_ui(respuesta_vacia)
+        logger.info("[UI] Panel CRM limpiado después del flujo WhatsApp/Email.")
+    except Exception:
+        logger.exception("[UI] Error al intentar limpiar el panel CRM.")
 
 @app.post("/chat/turn")
 async def chat_turn(payload: ChatTurnRequest):
@@ -702,7 +725,7 @@ async def chat_turn(payload: ChatTurnRequest):
                 payload_crm,
             )
 
-            # Llamada síncrona al CRM (igual que tu script de prueba)
+            # Llamada síncrona al CRM
             crear_lead_en_crm(payload_crm)
             meta["lead_creado"] = True
             logger.info("[%s] Lead creado en Zoho CRM correctamente.", session_id)
@@ -710,96 +733,118 @@ async def chat_turn(payload: ChatTurnRequest):
             # ------------------------------------------------------
             # Flujo WhatsApp + Email + Infografía (si está disponible)
             # ------------------------------------------------------
-           
-            nombre_cliente =  (
-                slots.get("nombre")
-                or slots.get("Name")
-                or "Visitante Totem"
-            )
-            empresa_cliente = (
-                slots.get("empresa")
-                or slots.get("Company")
-                or "Visitante Totem"
-            )
-            objetivo_cliente = (
-                slots.get("solucion_a_implementar")
-                or slots.get("objetivo")
-                or slots.get("OBJETIVO")
-                or slots.get("diagnostico")
-                or ""
-            )
+            if flujo_infografia_whatsapp_email is not None:
+                nombre_cliente = (
+                    slots.get("nombre")
+                    or slots.get("Name")
+                    or "Visitante Totem"
+                )
+                empresa_cliente = (
+                    slots.get("empresa")
+                    or slots.get("Company")
+                    or "Visitante Totem"
+                )
+                objetivo_cliente = (
+                    slots.get("solucion_a_implementar")
+                    or slots.get("objetivo")
+                    or slots.get("OBJETIVO")
+                    or slots.get("diagnostico")
+                    or ""
+                )
 
-            problemas = slots.get("problemas") or slots.get("retos") or ""
-            necesidades = slots.get("necesidades") or slots.get("necesidades_clave") or ""
-            soluciones = (
-                slots.get("soluciones")
-                or slots.get("productos")
-                or slots.get("solucion")
-                or []
-            )
+                problemas = slots.get("problemas") or slots.get("retos") or ""
+                necesidades = (
+                    slots.get("necesidades")
+                    or slots.get("necesidades_clave")
+                    or ""
+                )
+                soluciones = (
+                    slots.get("soluciones")
+                    or slots.get("productos")
+                    or slots.get("solucion")
+                    or []
+                )
 
-            datos_cliente: Dict[str, Any] = {
-                "nombre": nombre_cliente,
-                "empresa": empresa_cliente,
-                "OBJETIVO": objetivo_cliente,
-                "problemas": problemas,
-                "necesidades": necesidades,
-                "soluciones": soluciones,
-                "_slots_raw": slots,
-            }
+                datos_cliente: Dict[str, Any] = {
+                    "nombre": nombre_cliente,
+                    "empresa": empresa_cliente,
+                    "OBJETIVO": objetivo_cliente,
+                    "problemas": problemas,
+                    "necesidades": necesidades,
+                    "soluciones": soluciones,
+                    "_slots_raw": slots,
+                }
 
-            telefono_cliente = "+521"+(
-                slots.get("telefono")
-                or slots.get("phone")
-                or slots.get("Phone")
-                or None
-                ).replace('-', '').replace('_', '').replace(' ', '')            
-            email_cliente = (
-                slots.get("correo")
-                or slots.get("email")
-                or slots.get("Email")
-                or None
-            )
+                # Limpiar y formatear teléfono
+                telefono_slot = (
+                    slots.get("telefono")
+                    or slots.get("phone")
+                    or slots.get("Phone")
+                    or ""
+                )
+                telefono_limpio = (
+                    telefono_slot.replace("-", "")
+                    .replace("_", "")
+                    .replace(" ", "")
+                )
+                telefono_cliente = (
+                    f"+521{telefono_limpio}" if telefono_limpio else None
+                )
 
-            nombre_archivo = f"infografia_{empresa_cliente}".replace(" ", "_")
+                email_cliente = (
+                    slots.get("correo")
+                    or slots.get("email")
+                    or slots.get("Email")
+                    or None
+                )
 
-            logger.info(
-                "[%s] Disparando flujo_infografia_whatsapp_email (SINCRONO) con telefono=%r, email=%r, nombre_archivo=%r",
-                session_id,
-                telefono_cliente,
-                email_cliente,
-                nombre_archivo,
-            )
+                nombre_archivo = (
+                    f"infografia_{empresa_cliente}".replace(" ", "_")
+                )
 
-            # 👇 PRINT para verlo clarito en consola
-            print(
-                f">>> [{session_id}] EJECUTANDO flujo_infografia_whatsapp_email PARA {nombre_cliente} / {empresa_cliente}"
-            )
+                logger.info(
+                    "[%s] Disparando flujo_infografia_whatsapp_email (SINCRONO) "
+                    "con telefono=%r, email=%r, nombre_archivo=%r",
+                    session_id,
+                    telefono_cliente,
+                    email_cliente,
+                    nombre_archivo,
+                )
 
-            flujo_infografia_whatsapp_email(
-                datos_cliente,
-                telefono_cliente,
-                email_cliente,
-                nombre_archivo,
-                True,   # enviar_whatsapp
-                True,   # enviar_email
-            )
-            logger.info(
-                "[%s] flujo_infografia_whatsapp_email finalizó correctamente.",
-                session_id,
-            )
-        
+                print(
+                    f">>> [{session_id}] EJECUTANDO flujo_infografia_whatsapp_email "
+                    f"PARA {nombre_cliente} / {empresa_cliente}"
+                )
+
+                flujo_infografia_whatsapp_email(
+                    datos_cliente,
+                    telefono_cliente,
+                    email_cliente,
+                    nombre_archivo,
+                    True,   # enviar_whatsapp
+                    True,   # enviar_email
+                )
+
+                # 🔵 Aquí limpiamos el panel CRM del visor DESPUÉS del flujo
+                await _limpiar_panel_crm()
+
+                logger.info(
+                    "[%s] flujo_infografia_whatsapp_email finalizó correctamente.",
+                    session_id,
+                )
+            else:
+                logger.warning(
+                    "[%s] flujo_infografia_whatsapp_email es None; "
+                    "NO se disparó flujo WhatsApp/Email.",
+                    session_id,
+                )
 
         except Exception:
             logger.exception(
                 "[%s] Error en creación de lead o en flujo WhatsApp/Email.",
                 session_id,
             )
-    elif es_despedida and ready_minimos and crear_lead_en_crm is None:
-        logger.warning(
-            "[%s] crear_lead_en_crm es None; NO se creó lead en Zoho CRM.",
-            session_id,
-        )
+
 
     # ------------------------------------------------------
     # 3) Calcular progreso para el panel (opcional)

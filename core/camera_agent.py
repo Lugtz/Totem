@@ -27,6 +27,9 @@ import time
 import threading
 from typing import Optional
 
+import os
+import urllib.parse
+
 import cv2
 import requests
 from ultralytics import YOLO
@@ -43,11 +46,14 @@ logger = get_logger(__name__)
 API_BASE_URL = "http://127.0.0.1:8000"
 
 YOLO_MODEL_PATH = "yolov8n.pt"
-CAMERA_INDEX =0
+CAMERA_INDEX = 0
 PERSON_CLASS_ID = 0           # ID de "person" en COCO
 CONFIDENCE_THRESHOLD = 0.5    # Umbral de confianza mínimo
 
 SALUDO_COOLDOWN_SECONDS = 10.0  # Tiempo mínimo entre saludos para no spamear
+
+# URL del visor de Nacho (UI con panel CRM)
+NACHO_BASE_URL = os.getenv("NACHO_BASE_URL", "http://localhost:7000").rstrip("/")
 
 # ----------------------------------------------------------------------
 # Estado interno del detector
@@ -74,6 +80,33 @@ def _beep():
         except Exception:
             # Si algo falla con el beep, no queremos tirar el flujo
             logger.warning("[camera] No se pudo reproducir el bip.")
+
+
+# ----------------------------------------------------------------------
+# Helper: limpiar panel CRM del UI
+# ----------------------------------------------------------------------
+def _limpiar_panel_crm_ui() -> None:
+    """
+    Envía al visor (ui.py) un estado vacío para limpiar el panel CRM
+    después de terminar la conversación.
+    """
+    try:
+        data = {
+            "email": "",
+            "name": "",
+            "company": "",
+            "phone": "",
+            "proposal": "",
+        }
+
+        query = urllib.parse.urlencode(data, doseq=False, safe="")
+        url = f"{NACHO_BASE_URL}/crm?{query}"
+
+        logger.info("[camera] Limpiando panel CRM UI: %s", url)
+        # GET rápido; si falla, no tiramos el flujo
+        requests.get(url, timeout=1.0)
+    except Exception:
+        logger.exception("[camera] No se pudo limpiar el panel CRM UI.")
 
 
 # ----------------------------------------------------------------------
@@ -155,7 +188,15 @@ def _iniciar_conversacion_local(session_id: str) -> None:
 
     logger.info("[camera] Conversación por voz finalizada.")
     print("✅ Conversación por voz finalizada.\n")
+
+    # 🔵 Limpiar el panel CRM del UI ANTES de esperar los 30 segundos
+    try:
+        _limpiar_panel_crm_ui()
+    except Exception:
+        logger.exception("[camera] Error limpiando panel CRM UI al final de la conversación.")
+
     time.sleep(30)
+
 
 def _saludar_visitante() -> None:
     """
@@ -168,7 +209,8 @@ def _saludar_visitante() -> None:
     saludo = (
         "Hola, ¿cómo estás? "
         "Soy Nacho, el asistente virtual de Evolución i3. "
-        "Podemos conversar un momento y, si quieres, te ayudo a crear una propuesta para tu empresa , me puedes brindar tu nombre porfavor."
+        "Podemos conversar un momento y, si quieres, te ayudo a crear una propuesta para tu empresa, "
+        "¿me puedes brindar tu nombre por favor?"
     )
 
     # 🔊 Saludo por TTS (si TTS_ENABLED=1; si no, solo se loguea)

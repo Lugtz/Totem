@@ -31,3 +31,6 @@ pip install panda3d panda3d-gltf
 
 cambiar el nombre del ui 
 uvicorn amain:app --host 127.0.0.1 --port 8000 --reload
+
+
+speed_factor = 2.35 velocidad del ui    
